@@ -39,7 +39,7 @@ The helper keeps your Claude API key on a server, so family members don't need o
 cd worker
 npm install
 npx wrangler login                          # free Cloudflare account
-npx wrangler secret put ANTHROPIC_API_KEY   # from console.anthropic.com
+npx wrangler secret put ANTHROPIC_API_KEY   # console.anthropic.com → API keys; pick a workspace when creating it
 npx wrangler secret put ACCESS_CODE         # make up a passphrase
 npx wrangler deploy                         # prints https://utility-cost-helper.<you>.workers.dev
 ```
