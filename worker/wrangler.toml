@@ -1,0 +1,8 @@
+name = "utility-cost-helper"
+main = "src/index.js"
+compatibility_date = "2026-09-01"
+compatibility_flags = ["nodejs_compat"]
+
+[vars]
+# Set to your GitHub Pages origin (no path), e.g. "https://6079smith.github.io"
+ALLOWED_ORIGIN = "*"
