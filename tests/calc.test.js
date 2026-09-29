@@ -11,6 +11,7 @@ import {
   sumDays,
   recentDailyAverage,
   rates,
+  latestPeriod,
 } from '../src/calc.js';
 
 const near = (a, b, eps = 1e-6) => assert.ok(Math.abs(a - b) < eps, `${a} ≉ ${b}`);
@@ -233,4 +234,47 @@ test('economy 7 night register going backwards is invalid', () => {
     'electricity',
   );
   assert.equal(ivs[0].invalid, true);
+});
+
+test('readings minutes apart give no averages or projection', () => {
+  const readings = [
+    { id: '1', fuel: 'electricity', at: '2026-01-01T12:00:00Z', value: 100 },
+    { id: '2', fuel: 'electricity', at: '2026-01-01T12:01:00Z', value: 101 },
+  ];
+  const tariffs = [{ fuel: 'electricity', supplier: 'manual', from: '2025-01-01T00:00:00Z', to: null, unitRate: 30, standingCharge: 0 }];
+  const a = analyseFuel({ readings, tariffs, fuel: 'electricity', vatRate: 0 });
+  assert.equal(recentDailyAverage(a.intervals), null);
+  const p = latestPeriod(a.intervals);
+  assert.equal(p.enough, false);
+  near(p.cost.totalP, 30);
+});
+
+test('latest period extends back over short intervals until long enough', () => {
+  const readings = [
+    { id: '1', fuel: 'electricity', at: '2026-01-01T00:00:00Z', value: 100 },
+    { id: '2', fuel: 'electricity', at: '2026-01-01T10:00:00Z', value: 110 },
+    { id: '3', fuel: 'electricity', at: '2026-01-01T12:00:00Z', value: 112 },
+    { id: '4', fuel: 'electricity', at: '2026-01-01T12:01:00Z', value: 113 },
+  ];
+  const tariffs = [{ fuel: 'electricity', supplier: 'manual', from: '2025-01-01T00:00:00Z', to: null, unitRate: 10, standingCharge: 0 }];
+  const a = analyseFuel({ readings, tariffs, fuel: 'electricity', vatRate: 0 });
+  const p = latestPeriod(a.intervals);
+  assert.equal(p.enough, true);
+  assert.equal(p.from, Date.parse('2026-01-01T00:00:00Z'));
+  near(p.kwh, 13);
+  near(p.rates.perHour.kwh, 13 / (12 + 1 / 60));
+});
+
+test('latest period does not cross a meter reset', () => {
+  const readings = [
+    { id: '1', fuel: 'electricity', at: '2026-01-01T00:00:00Z', value: 100 },
+    { id: '2', fuel: 'electricity', at: '2026-01-01T10:00:00Z', value: 110 },
+    { id: '3', fuel: 'electricity', at: '2026-01-01T11:00:00Z', value: 5, reset: true },
+    { id: '4', fuel: 'electricity', at: '2026-01-01T12:00:00Z', value: 6 },
+  ];
+  const tariffs = [{ fuel: 'electricity', supplier: 'manual', from: '2025-01-01T00:00:00Z', to: null, unitRate: 10, standingCharge: 0 }];
+  const a = analyseFuel({ readings, tariffs, fuel: 'electricity', vatRate: 0 });
+  const p = latestPeriod(a.intervals);
+  assert.equal(p.from, Date.parse('2026-01-01T11:00:00Z'));
+  assert.equal(p.enough, false);
 });

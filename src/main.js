@@ -13,7 +13,17 @@ import {
   importJson,
   requestPersistence,
 } from './store.js';
-import { analyseFuel, buildIntervals, toKwh, sumDays, recentDailyAverage, dayKey, tariffSegments, costInterval } from './calc.js';
+import {
+  analyseFuel,
+  buildIntervals,
+  sumDays,
+  recentDailyAverage,
+  latestPeriod,
+  dayKey,
+  tariffSegments,
+  costInterval,
+  MIN_RATE_HOURS,
+} from './calc.js';
 import { REGIONS, regionForPostcode, listProducts, fetchRates } from './octopus.js';
 import { prepareImage, readMeter, aiAvailable } from './meterReader.js';
 import { renderDailyChart } from './chart.js';
@@ -36,6 +46,15 @@ const fmtDate = (t, opts = { day: 'numeric', month: 'short' }) => new Date(t).to
 const fmtDateTime = (t) =>
   new Date(t).toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
 const fuelName = (f) => (f === 'gas' ? 'Gas' : 'Electricity');
+
+/** "25 min", "7 hours", "3.5 days". */
+function fmtSpan(msSpan) {
+  const mins = msSpan / 60e3;
+  if (mins < 90) return `${Math.max(0, Math.round(mins))} min`;
+  const hours = mins / 60;
+  if (hours < 36) return `${Math.round(hours)} hours`;
+  return `${num(hours / 24, 1)} days`;
+}
 const meterUnit = (f) => (f === 'gas' ? (getState().settings.gas.units === 'ft3' ? 'ft³' : 'm³') : 'kWh');
 
 function ago(t) {
@@ -124,13 +143,20 @@ function renderHome() {
 
   if (anyIntervals) {
     const perDay = avgs.reduce((t, x) => t + (x?.costP || 0), 0);
-    html += `<div class="card">
-      <div class="hero-label">Typical monthly cost at your current rate</div>
-      <div class="hero">${gbp(perDay * 30.44)}</div>
-      <div class="muted small">≈ ${gbp(perDay)} a day · ${gbp(perDay * 7)} a week</div>
-      <div class="tiles two">
-        <div class="tile"><div class="label">This week so far</div><div class="value">${gbp(week.reduce((t, x) => t + x.costP, 0))}</div><div class="sub">${num(Math.max(...week.map((w) => w.coveredDays)), 1)} days measured</div></div>
-        <div class="tile"><div class="label">This month so far</div><div class="value">${gbp(month.reduce((t, x) => t + x.costP, 0))}</div><div class="sub">${num(Math.max(...month.map((w) => w.coveredDays)), 1)} days measured</div></div>
+    const pending = FUELS.filter((f, i) => a[f].intervals.length && !avgs[i]);
+    html += '<div class="card">';
+    if (avgs.some(Boolean)) {
+      html += `<div class="hero-label">Typical monthly cost at your current rate</div>
+        <div class="hero">${gbp(perDay * 30.44)}</div>
+        <div class="muted small">≈ ${gbp(perDay)} a day · ${gbp(perDay * 7)} a week</div>`;
+      if (pending.length) html += `<p class="tiny" style="margin-top:4px">${pending.map(fuelName).join(' and ')} not included yet (readings too close together).</p>`;
+    } else {
+      html += `<h3>Typical monthly cost</h3>
+        <p class="muted small">Needs readings at least ${MIN_RATE_HOURS} hours apart. A day or more apart gives the best estimate.</p>`;
+    }
+    html += `<div class="tiles two">
+        <div class="tile"><div class="label">This week so far</div><div class="value">${gbp(week.reduce((t, x) => t + x.costP, 0))}</div><div class="sub">${fmtSpan(Math.max(...week.map((w) => w.coveredDays)) * DAY)} measured</div></div>
+        <div class="tile"><div class="label">This month so far</div><div class="value">${gbp(month.reduce((t, x) => t + x.costP, 0))}</div><div class="sub">${fmtSpan(Math.max(...month.map((w) => w.coveredDays)) * DAY)} measured</div></div>
       </div>
       <p class="tiny" style="margin-top:8px">“So far” only counts up to your latest reading. Includes standing charges and 5% VAT.</p>
     </div>`;
@@ -141,7 +167,7 @@ function renderHome() {
     if (!readings.length && !currentTariff(fuel)) continue;
     const an = a[fuel];
     const last = readings[readings.length - 1];
-    const latest = an.intervals[an.intervals.length - 1];
+    const latest = latestPeriod(an.intervals);
     html += `<div class="card"><div class="card-head"><div class="fuel-title"><i class="swatch ${fuel}"></i>${fuelName(fuel)}</div>`;
     html += last ? `<span class="tiny">Read ${ago(Date.parse(last.at))}</span>` : '';
     html += '</div>';
@@ -153,18 +179,23 @@ function renderHome() {
         <a class="btn secondary" href="#add?fuel=${fuel}">Add reading</a>`;
     } else {
       const r = latest.rates;
-      html += `<div class="hero-label">Since ${fmtDateTime(latest.from)} (${num(r.days, 1)} days)</div>
+      html += `<div class="hero-label">Since ${fmtDateTime(latest.from)} (${fmtSpan(latest.to - latest.from)})</div>
         <div class="hero" style="font-size:34px">${gbp(latest.cost.totalP)}</div>
         <div class="muted small">${num(latest.kwh, 1)} kWh${fuel === 'gas' ? ` (${num(latest.units, 2)} ${meterUnit(fuel)})` : ''}${
-          latest.nightUnits !== undefined
+          latest.hasNight
             ? `: day ${num(latest.dayKwh, 1)} · night ${num(latest.nightKwh, 1)} (${Math.round((100 * latest.nightKwh) / (latest.kwh || 1))}% at night)`
             : ''
-        }</div>
-        <div class="tiles">
+        }</div>`;
+      if (latest.enough) {
+        html += `<div class="tiles">
           <div class="tile"><div class="label">Per hour</div><div class="value">${pence(r.perHour.costP)}</div><div class="sub">${num(r.perHour.kwh, 2)} kWh</div></div>
           <div class="tile"><div class="label">Per day</div><div class="value">${gbp(r.perDay.costP)}</div><div class="sub">${num(r.perDay.kwh, 1)} kWh</div></div>
           <div class="tile"><div class="label">Per week</div><div class="value">${gbp(r.perWeek.costP)}</div><div class="sub">${num(r.perWeek.kwh, 0)} kWh</div></div>
         </div>`;
+      } else {
+        html += `<div class="notice">Your readings are only ${fmtSpan(latest.to - latest.from)} apart. The meter counts whole units, so that’s too short to work out an hourly, daily or weekly rate.
+          Take your next reading at least ${MIN_RATE_HOURS} hours after ${fmtDateTime(latest.from)}; a day or more is better.</div>`;
+      }
       if (latest.cost.missingTariff) html += `<div class="notice">Part of this period has no tariff set, so the cost is too low. Check the tariff start date in Settings.</div>`;
       if (latest.cost.noNightRate) html += `<div class="notice">Night units are being charged at the normal rate because your tariff has no night rate. <a href="#settings">Set an Economy 7 tariff</a>.</div>`;
     }
@@ -320,8 +351,10 @@ function renderAdd() {
     const cost = costInterval(iv, tariffSegments(st.tariffs, fuel), st.settings.vatRate);
     const days = (iv.to - iv.from) / DAY;
     const split = e7() ? ` <span class="muted">(${num(iv.dayKwh, 1)} day + ${num(iv.nightKwh, 1)} night)</span>` : '';
-    estimateEl.innerHTML = `<strong>${num(iv.kwh, 1)} kWh</strong>${split} used in ${num(days, 1)} days ≈ <strong>${gbp(cost.totalP)}</strong>
-      <span class="muted">(${gbp(cost.totalP / days || 0)}/day)</span>
+    const tooSoon = days * 24 < MIN_RATE_HOURS;
+    estimateEl.innerHTML = `<strong>${num(iv.kwh, 1)} kWh</strong>${split} used in ${fmtSpan(iv.to - iv.from)} ≈ <strong>${gbp(cost.totalP)}</strong>
+      ${tooSoon ? '' : `<span class="muted">(${gbp(cost.totalP / days || 0)}/day)</span>`}
+      ${tooSoon ? `<div class="tiny">Only ${fmtSpan(iv.to - iv.from)} since the last reading. Hourly and daily figures appear once readings are ${MIN_RATE_HOURS}+ hours apart.</div>` : ''}
       ${cost.missingTariff ? '<div class="notice">No tariff covers all of this period yet. Add one in Settings.</div>' : ''}
       ${cost.noNightRate ? '<div class="notice">Your tariff has no night rate, so night units are charged at the normal rate. Set an Economy 7 tariff in Settings.</div>' : ''}`;
   };
@@ -459,7 +492,7 @@ function renderHistory() {
         ? `<ul class="list">${intervals
             .map(
               (iv) => `<li><div class="main"><div>${fmtDate(iv.from)} – ${fmtDate(iv.to)}</div>
-                <div class="tiny">${num(iv.kwh, 1)} kWh${iv.nightUnits !== undefined ? ` (${num(iv.nightKwh, 1)} night)` : ''} · ${num(iv.rates.days, 1)} days · ${gbp(iv.rates.perDay.costP)}/day</div></div>
+                <div class="tiny">${num(iv.kwh, 1)} kWh${iv.nightUnits !== undefined ? ` (${num(iv.nightKwh, 1)} night)` : ''} · ${fmtSpan(iv.to - iv.from)}${iv.rates.hours >= MIN_RATE_HOURS ? ` · ${gbp(iv.rates.perDay.costP)}/day` : ''}</div></div>
                 <div class="amount">${gbp(iv.cost.totalP)}${iv.cost.missingTariff ? '<div class="tiny">tariff missing</div>' : ''}</div></li>`,
             )
             .join('')}</ul>`

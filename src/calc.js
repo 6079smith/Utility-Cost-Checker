@@ -12,6 +12,13 @@ export const DEFAULT_VAT_RATE = 0.05;
 const HOUR = 3600e3;
 const DAY = 24 * HOUR;
 
+/**
+ * Meters only count whole units, so readings close together give wildly
+ * wrong rates (1 kWh in a minute looks like 60 kWh an hour). Averages and
+ * projections need at least this much time between readings.
+ */
+export const MIN_RATE_HOURS = 6;
+
 const ms = (t) => (t instanceof Date ? t.getTime() : new Date(t).getTime());
 
 /** Convert a meter-unit difference to kWh. Electricity meters already read kWh. */
@@ -261,7 +268,7 @@ export function sumDays(daily, fromKey, toKey) {
  * Average daily cost over the most recent `windowDays` of recorded usage,
  * falling back to whatever history exists. Used for projections.
  */
-export function recentDailyAverage(intervals, windowDays = 30) {
+export function recentDailyAverage(intervals, windowDays = 30, minHours = MIN_RATE_HOURS) {
   if (!intervals.length) return null;
   const end = intervals[intervals.length - 1].to;
   const start = end - windowDays * DAY;
@@ -277,7 +284,45 @@ export function recentDailyAverage(intervals, windowDays = 30) {
     kwh += iv.kwh * frac;
     spanMs += b - a;
   }
-  if (!spanMs) return null;
+  if (!spanMs || spanMs < minHours * HOUR) return null;
   const days = spanMs / DAY;
   return { costP: costP / days, kwh: kwh / days, basedOnDays: days };
+}
+
+/**
+ * The latest usage period long enough to average over: the last interval,
+ * extended back over earlier back-to-back intervals until it spans at least
+ * `minHours`. `enough` is false when all the history is shorter than that, in
+ * which case only the totals (not the rates) are meaningful.
+ */
+export function latestPeriod(intervals, minHours = MIN_RATE_HOURS) {
+  if (!intervals.length) return null;
+  let i = intervals.length - 1;
+  const p = {
+    from: intervals[i].from,
+    to: intervals[i].to,
+    kwh: 0,
+    dayKwh: 0,
+    nightKwh: 0,
+    units: 0,
+    hasNight: intervals[i].nightUnits !== undefined,
+    cost: { totalP: 0, missingTariff: false, noNightRate: false },
+  };
+  for (; i >= 0; i--) {
+    const iv = intervals[i];
+    // Stop at a gap (meter replaced, or a skipped bad reading).
+    if (iv.to !== p.from && i !== intervals.length - 1) break;
+    p.from = iv.from;
+    p.kwh += iv.kwh;
+    p.dayKwh += iv.dayKwh ?? iv.kwh;
+    p.nightKwh += iv.nightKwh ?? 0;
+    p.units += iv.units;
+    p.cost.totalP += iv.cost.totalP;
+    p.cost.missingTariff ||= iv.cost.missingTariff;
+    p.cost.noNightRate ||= !!iv.cost.noNightRate;
+    if (p.to - p.from >= minHours * HOUR) break;
+  }
+  p.enough = p.to - p.from >= minHours * HOUR;
+  p.rates = rates(p, p.cost);
+  return p;
 }
