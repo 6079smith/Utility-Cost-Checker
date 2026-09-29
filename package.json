@@ -11,7 +11,8 @@
     "test": "TZ=Europe/London node --test tests/*.test.js"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.129.0"
+    "@anthropic-ai/sdk": "^0.129.0",
+    "@fontsource/azeret-mono": "^5.3.0"
   },
   "devDependencies": {
     "vite": "^8.3.1"

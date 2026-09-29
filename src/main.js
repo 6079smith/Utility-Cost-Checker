@@ -1,3 +1,4 @@
+import '@fontsource/azeret-mono/500.css';
 import {
   FUELS,
   getState,
@@ -26,7 +27,7 @@ import {
 } from './calc.js';
 import { REGIONS, regionForPostcode, listProducts, fetchRates } from './octopus.js';
 import { prepareImage, readMeter, aiAvailable } from './meterReader.js';
-import { renderDailyChart } from './chart.js';
+import { renderDailyChart, ringSvg, sparkSvg } from './chart.js';
 import { classifyLabel, mapRegisters, looksSwapped } from './registers.js';
 
 const view = document.getElementById('view');
@@ -55,6 +56,80 @@ function fmtSpan(msSpan) {
   if (hours < 36) return `${Math.round(hours)} hours`;
   return `${num(hours / 24, 1)} days`;
 }
+const fmtTime = (t) => new Date(t).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+/** CSS colour variable name for a fuel. */
+const fuelVar = (f) => (f === 'gas' ? 'gas' : 'elec');
+
+/** A meter reading as digit boxes, like the drums on the meter. */
+function digitBoxes(value, fuel, { unit = true } = {}) {
+  const [whole, frac] = String(value).split('.');
+  let html = `<div class="digits" role="img" aria-label="${esc(value)} ${esc(meterUnit(fuel))}">`;
+  html += [...whole.padStart(5, '0')].map((d) => `<span>${d}</span>`).join('');
+  if (frac) html += '<span class="sep">.</span>' + [...frac].map((d) => `<span class="frac">${d}</span>`).join('');
+  if (unit) html += `<span class="unit">${esc(meterUnit(fuel))}</span>`;
+  return html + '</div>';
+}
+
+/**
+ * Show a text input as meter-style digit boxes. The real input sits invisibly
+ * on top so typing, the iPhone keyboard and accessibility all still work.
+ */
+function digitInput(input) {
+  const wrap = document.createElement('div');
+  wrap.className = 'dig-input';
+  input.replaceWith(wrap);
+  const boxes = document.createElement('div');
+  boxes.className = 'digits big';
+  boxes.setAttribute('aria-hidden', 'true');
+  wrap.append(boxes, input);
+  const render = () => {
+    const focused = document.activeElement === input;
+    let text = input.value.replace(/[^0-9.]/g, '');
+    // Show leading zeros like the meter's drums (display only).
+    if (!focused && text) {
+      const [whole, frac] = text.split('.');
+      text = whole.padStart(5, '0') + (frac !== undefined ? '.' + frac : '');
+    }
+    const chars = [...text];
+    const n = Math.max(5, chars.length + (focused && chars.length < 9 ? 1 : 0));
+    boxes.innerHTML = Array.from({ length: n }, (_, i) => {
+      const c = chars[i];
+      if (c === '.') return '<span class="sep">.</span>';
+      const cls = [c === undefined ? 'empty' : '', focused && i === chars.length ? 'cur' : ''].join(' ').trim();
+      return `<span class="${cls}">${c ?? '0'}</span>`;
+    }).join('');
+  };
+  ['input', 'focus', 'blur'].forEach((e) => input.addEventListener(e, render));
+  input._render = render;
+  render();
+}
+
+/** Most recent calendar day with any usage, for the Home gauge. */
+function latestDay(a) {
+  const keys = FUELS.flatMap((f) => Object.keys(a[f].daily)).sort();
+  const key = keys[keys.length - 1];
+  const byFuel = {};
+  let partial = false;
+  for (const f of FUELS) {
+    const d = a[f].daily[key];
+    byFuel[f] = d?.costP || 0;
+    if (d && d.ms < DAY - 3600e3) partial = true;
+  }
+  const totalP = FUELS.reduce((t, f) => t + byFuel[f], 0);
+  const name =
+    key === dayKey(Date.now()) ? 'today' : key === dayKey(Date.now() - DAY) ? 'yesterday' : fmtDate(key + 'T12:00:00');
+  return { key, byFuel, totalP, label: partial ? `${name} so far` : name };
+}
+
+/** Daily cost for the last 14 fully-measured days in the past 30. */
+function sparkValues(daily) {
+  const from = dayKey(Date.now() - 30 * DAY);
+  return Object.keys(daily)
+    .filter((k) => k >= from && daily[k].ms >= DAY - 3600e3)
+    .sort()
+    .slice(-14)
+    .map((k) => daily[k].costP);
+}
 const meterUnit = (f) => (f === 'gas' ? (getState().settings.gas.units === 'ft3' ? 'ft³' : 'm³') : 'kWh');
 
 function ago(t) {
@@ -78,6 +153,18 @@ function toast(msg) {
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => el.classList.remove('show'), 2600);
 }
+
+// ---------- theme ----------
+
+const darkQuery = window.matchMedia('(prefers-color-scheme: dark)');
+
+function applyTheme() {
+  const pref = getState().settings.theme || 'dark';
+  const mode = pref === 'system' ? (darkQuery.matches ? 'dark' : 'light') : pref;
+  document.documentElement.dataset.theme = mode;
+  document.querySelector('meta[name="theme-color"]')?.setAttribute('content', mode === 'dark' ? '#0e0e0d' : '#f6f5f1');
+}
+darkQuery.addEventListener('change', applyTheme);
 
 // ---------- analysis ----------
 
@@ -140,26 +227,40 @@ function renderHome() {
   const month = FUELS.map((f) => sumDays(a[f].daily, dayKey(monthStart), today));
   const avgs = FUELS.map((f) => recentDailyAverage(a[f].intervals, 30));
   const anyIntervals = FUELS.some((f) => a[f].intervals.length);
+  const weekP = week.reduce((t, x) => t + x.costP, 0);
+  const monthP = month.reduce((t, x) => t + x.costP, 0);
 
   if (anyIntervals) {
     const perDay = avgs.reduce((t, x) => t + (x?.costP || 0), 0);
     const pending = FUELS.filter((f, i) => a[f].intervals.length && !avgs[i]);
     html += '<div class="card">';
     if (avgs.some(Boolean)) {
-      html += `<div class="hero-label">Typical monthly cost at your current rate</div>
-        <div class="hero">${gbp(perDay * 30.44)}</div>
-        <div class="muted small">≈ ${gbp(perDay)} a day · ${gbp(perDay * 7)} a week</div>`;
-      if (pending.length) html += `<p class="tiny" style="margin-top:4px">${pending.map(fuelName).join(' and ')} not included yet (readings too close together).</p>`;
+      const g = latestDay(a);
+      html += `<div class="gauge">
+          <div class="gauge-ring">${ringSvg(FUELS.map((f) => ({ frac: (g.byFuel[f] || 0) / perDay, color: `var(--${fuelVar(f)})` })))}
+            <div class="gauge-mid"><div class="v">${gbp(g.totalP)}</div><div class="s">${esc(g.label)}<br>of ${gbp(perDay)} typical</div></div>
+          </div>
+          <div class="gauge-side">
+            <div class="caps">Typical month</div>
+            <div class="v">${gbp(perDay * 30.44)}</div>
+            <div class="key">${FUELS.map((f, i) => (avgs[i] ? `<span><i class="swatch ${f}"></i>${fuelName(f)} ${gbp(avgs[i].costP)}/day</span>` : '')).join('')}</div>
+          </div>
+        </div>`;
+      if (pending.length) html += `<p class="tiny" style="margin-top:8px">${pending.map(fuelName).join(' and ')} not included yet (readings too close together).</p>`;
+      html += `<div class="tiles">
+          <div class="tile"><div class="label">Week</div><div class="value">${gbp(weekP)}</div><div class="sub">so far</div></div>
+          <div class="tile"><div class="label">Month</div><div class="value">${gbp(monthP)}</div><div class="sub">so far</div></div>
+          <div class="tile"><div class="label">Per week</div><div class="value">${gbp(perDay * 7)}</div><div class="sub">typical</div></div>
+        </div>`;
     } else {
       html += `<h3>Typical monthly cost</h3>
-        <p class="muted small">Needs readings at least ${MIN_RATE_HOURS} hours apart. A day or more apart gives the best estimate.</p>`;
+        <p class="muted small">Needs readings at least ${MIN_RATE_HOURS} hours apart. A day or more apart gives the best estimate.</p>
+        <div class="tiles two">
+          <div class="tile"><div class="label">Week</div><div class="value">${gbp(weekP)}</div><div class="sub">so far</div></div>
+          <div class="tile"><div class="label">Month</div><div class="value">${gbp(monthP)}</div><div class="sub">so far</div></div>
+        </div>`;
     }
-    html += `<div class="tiles two">
-        <div class="tile"><div class="label">This week so far</div><div class="value">${gbp(week.reduce((t, x) => t + x.costP, 0))}</div><div class="sub">${fmtSpan(Math.max(...week.map((w) => w.coveredDays)) * DAY)} measured</div></div>
-        <div class="tile"><div class="label">This month so far</div><div class="value">${gbp(month.reduce((t, x) => t + x.costP, 0))}</div><div class="sub">${fmtSpan(Math.max(...month.map((w) => w.coveredDays)) * DAY)} measured</div></div>
-      </div>
-      <p class="tiny" style="margin-top:8px">“So far” only counts up to your latest reading. Includes standing charges and 5% VAT.</p>
-    </div>`;
+    html += `<p class="tiny" style="margin-top:8px">“So far” counts up to your latest reading. Includes standing charges and 5% VAT.</p></div>`;
   }
 
   for (const fuel of FUELS) {
@@ -168,29 +269,40 @@ function renderHome() {
     const an = a[fuel];
     const last = readings[readings.length - 1];
     const latest = latestPeriod(an.intervals);
-    html += `<div class="card"><div class="card-head"><div class="fuel-title"><i class="swatch ${fuel}"></i>${fuelName(fuel)}</div>`;
-    html += last ? `<span class="tiny">Read ${ago(Date.parse(last.at))}</span>` : '';
-    html += '</div>';
+    const e7Reading = last && typeof last.night === 'number';
+    html += `<div class="card"><div class="fuel-head"><i class="swatch ${fuel}"></i>${fuelName(fuel)}${
+      e7Reading ? '<span class="tag">E7</span>' : ''
+    }${last ? `<span class="when">Read ${ago(Date.parse(last.at))} ${fmtTime(last.at)}</span>` : ''}</div>`;
     if (!currentTariff(fuel)) html += `<div class="notice">No ${fuel} tariff yet. <a href="#settings">Add one</a> to see costs.</div>`;
+    if (last) {
+      html += e7Reading
+        ? `<div class="reg"><span class="lab">Day</span>${digitBoxes(last.value, fuel)}</div>
+           <div class="reg"><span class="lab">Night</span>${digitBoxes(last.night, fuel)}</div>`
+        : `<div class="reg"><span class="lab">Meter</span>${digitBoxes(last.value, fuel)}</div>`;
+    }
     if (!last) {
       html += `<p class="muted">No readings yet.</p><a class="btn secondary" href="#add?fuel=${fuel}">Add first reading</a>`;
     } else if (!latest) {
-      html += `<p class="muted">Last reading ${describeReading(last, fuel)} on ${fmtDate(last.at)}. Add another reading to see usage and cost.</p>
+      html += `<p class="muted small" style="margin-top:12px">Add another reading to see usage and cost.</p>
         <a class="btn secondary" href="#add?fuel=${fuel}">Add reading</a>`;
     } else {
       const r = latest.rates;
-      html += `<div class="hero-label">Since ${fmtDateTime(latest.from)} (${fmtSpan(latest.to - latest.from)})</div>
-        <div class="hero" style="font-size:34px">${gbp(latest.cost.totalP)}</div>
-        <div class="muted small">${num(latest.kwh, 1)} kWh${fuel === 'gas' ? ` (${num(latest.units, 2)} ${meterUnit(fuel)})` : ''}${
-          latest.hasNight
-            ? `: day ${num(latest.dayKwh, 1)} · night ${num(latest.nightKwh, 1)} (${Math.round((100 * latest.nightKwh) / (latest.kwh || 1))}% at night)`
-            : ''
-        }</div>`;
+      const trend = sparkValues(an.daily);
+      html += `<div class="fuel-sum">
+          <div>
+            <div class="tiny">Since ${fmtDateTime(latest.from)} · ${fmtSpan(latest.to - latest.from)}</div>
+            <div class="amt">${gbp(latest.cost.totalP)}</div>
+            <div class="tiny">${num(latest.kwh, 1)} kWh${fuel === 'gas' ? ` (${num(latest.units, 2)} ${meterUnit(fuel)})` : ''}${
+              latest.hasNight ? ` · ${Math.round((100 * latest.nightKwh) / (latest.kwh || 1))}% at night` : ''
+            }</div>
+          </div>
+          ${trend.length >= 2 ? `<div class="spark">${sparkSvg(trend, `var(--${fuelVar(fuel)})`)}<div class="tiny">${trend.length} days</div></div>` : ''}
+        </div>`;
       if (latest.enough) {
         html += `<div class="tiles">
-          <div class="tile"><div class="label">Per hour</div><div class="value">${pence(r.perHour.costP)}</div><div class="sub">${num(r.perHour.kwh, 2)} kWh</div></div>
-          <div class="tile"><div class="label">Per day</div><div class="value">${gbp(r.perDay.costP)}</div><div class="sub">${num(r.perDay.kwh, 1)} kWh</div></div>
-          <div class="tile"><div class="label">Per week</div><div class="value">${gbp(r.perWeek.costP)}</div><div class="sub">${num(r.perWeek.kwh, 0)} kWh</div></div>
+          <div class="tile"><div class="label">Hour</div><div class="value">${pence(r.perHour.costP)}</div><div class="sub">${num(r.perHour.kwh, 2)} kWh</div></div>
+          <div class="tile"><div class="label">Day</div><div class="value">${gbp(r.perDay.costP)}</div><div class="sub">${num(r.perDay.kwh, 1)} kWh</div></div>
+          <div class="tile"><div class="label">Week</div><div class="value">${gbp(r.perWeek.costP)}</div><div class="sub">${num(r.perWeek.kwh, 0)} kWh</div></div>
         </div>`;
       } else {
         html += `<div class="notice">Your readings are only ${fmtSpan(latest.to - latest.from)} apart. The meter counts whole units, so that’s too short to work out an hourly, daily or weekly rate.
@@ -199,7 +311,7 @@ function renderHome() {
       if (latest.cost.missingTariff) html += `<div class="notice">Part of this period has no tariff set, so the cost is too low. Check the tariff start date in Settings.</div>`;
       if (latest.cost.noNightRate) html += `<div class="notice">Night units are being charged at the normal rate because your tariff has no night rate. <a href="#settings">Set an Economy 7 tariff</a>.</div>`;
     }
-    if (last && fuel === 'electricity' && isEconomy7() !== (typeof last.night === 'number')) {
+    if (last && fuel === 'electricity' && isEconomy7() !== e7Reading) {
       html += `<div class="notice">Your meter type changed to ${isEconomy7() ? 'Economy 7' : 'single rate'}. Usage will show again after two readings of the new type.</div>`;
     }
     html += '</div>';
@@ -263,27 +375,27 @@ function renderAdd() {
       ${FUELS.map((f) => `<button type="button" data-fuel="${f}" aria-pressed="${f === fuel}">${fuelName(f)}</button>`).join('')}
     </div>
     <div class="card">
-      <label class="btn" style="margin:0;color:var(--accent-ink)" for="photo">
-        <svg viewBox="0 0 24 24"><path d="M4 8h3l2-3h6l2 3h3a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z"/><circle cx="12" cy="13.5" r="3.5"/></svg>
-        Take photo of meter
-      </label>
+      <div class="viewfinder">
+        <img id="preview" alt="Meter photo" hidden />
+        <div class="hint" id="vf-hint">Point the camera at the numbers on your meter</div>
+      </div>
+      <div id="ai-status" class="found"></div>
+      <label class="shutter" for="photo"><i></i><span>Take photo</span></label>
       <input id="photo" type="file" accept="image/*" capture="environment" hidden />
-      <p id="e7-photo-tip" class="tiny" style="margin-top:8px" hidden>Economy 7: if your meter is digital and shows one rate at a time, press its button to show the other rate and take a second photo. Each photo fills in whichever rate it shows.</p>
-      ${canAi ? '' : '<p class="tiny" style="margin-top:8px">Photo reading isn’t set up on this phone, so type the numbers in below. You can set it up in Settings.</p>'}
-      <img id="preview" class="photo-preview" alt="Meter photo" hidden />
-      <div id="ai-status" class="small" style="margin-top:8px"></div>
+      <p id="e7-photo-tip" class="tiny" style="margin-top:10px;text-align:center" hidden>Digital meter showing one rate at a time? Press its button to show the other rate and take a second photo. Each photo fills in whichever rate it shows.</p>
+      ${canAi ? '' : '<p class="tiny" style="margin-top:10px;text-align:center">Photo reading isn’t set up on this phone, so type the numbers in below. You can set it up in Settings.</p>'}
     </div>
     <form id="reading-form" class="card" novalidate>
       <div id="single-fields">
-        <label for="value">Meter reading (<span class="unit"></span>)</label>
-        <input id="value" class="big-input" inputmode="decimal" autocomplete="off" placeholder="00000" />
+        <label class="caps" for="value">Meter reading (<span class="unit"></span>)</label>
+        <input id="value" inputmode="decimal" autocomplete="off" />
       </div>
       <div id="e7-fields" hidden>
-        <div class="row">
-          <div><label for="day">Day / Normal (kWh)</label><input id="day" class="big-input" inputmode="decimal" autocomplete="off" placeholder="00000" /></div>
-          <div><label for="night">Night / Low (kWh)</label><input id="night" class="big-input" inputmode="decimal" autocomplete="off" placeholder="00000" /></div>
-        </div>
-        <button type="button" class="linkish" id="swap">⇄ Swap day and night</button>
+        <label class="caps" for="day">Day / Normal (kWh)</label>
+        <input id="day" inputmode="decimal" autocomplete="off" />
+        <label class="caps" for="night">Night / Low (kWh)</label>
+        <input id="night" inputmode="decimal" autocomplete="off" />
+        <div><button type="button" class="linkish" id="swap">⇄ Swap day and night</button></div>
       </div>
       <p id="prev" class="tiny" style="margin-top:6px"></p>
       <label for="at">Date and time of reading</label>
@@ -295,6 +407,7 @@ function renderAdd() {
     </form>`;
 
   const $ = (sel) => view.querySelector(sel);
+  ['#value', '#day', '#night'].forEach((id) => digitInput($(id)));
   const atEl = $('#at');
   const resetEl = $('#reset');
   const statusEl = $('#ai-status');
@@ -332,6 +445,7 @@ function renderAdd() {
     const typeChanged = prev && fuel === 'electricity' && (typeof prev.night === 'number') !== e7();
     if (typeChanged) prevEl.textContent += e7() ? '. That was a single-rate reading, so Economy 7 counting starts from this one.' : '. That was an Economy 7 reading, so single-rate counting starts from this one.';
 
+    ['#value', '#day', '#night'].forEach((id) => $(id)._render?.());
     errEl.textContent = '';
     estimateEl.innerHTML = '';
     const d = draft();
@@ -350,11 +464,15 @@ function renderAdd() {
     if (!iv) return;
     const cost = costInterval(iv, tariffSegments(st.tariffs, fuel), st.settings.vatRate);
     const days = (iv.to - iv.from) / DAY;
-    const split = e7() ? ` <span class="muted">(${num(iv.dayKwh, 1)} day + ${num(iv.nightKwh, 1)} night)</span>` : '';
     const tooSoon = days * 24 < MIN_RATE_HOURS;
-    estimateEl.innerHTML = `<strong>${num(iv.kwh, 1)} kWh</strong>${split} used in ${fmtSpan(iv.to - iv.from)} ≈ <strong>${gbp(cost.totalP)}</strong>
-      ${tooSoon ? '' : `<span class="muted">(${gbp(cost.totalP / days || 0)}/day)</span>`}
-      ${tooSoon ? `<div class="tiny">Only ${fmtSpan(iv.to - iv.from)} since the last reading. Hourly and daily figures appear once readings are ${MIN_RATE_HOURS}+ hours apart.</div>` : ''}
+    estimateEl.innerHTML = `<div class="tiles">
+        <div class="tile"><div class="label">Used</div><div class="value">${num(iv.kwh, iv.kwh >= 100 ? 0 : 1)} kWh</div><div class="sub">${fmtSpan(iv.to - iv.from)}</div></div>
+        <div class="tile"><div class="label">Cost</div><div class="value">${gbp(cost.totalP)}</div><div class="sub">inc. VAT</div></div>
+        <div class="tile"><div class="label">Per day</div><div class="value">${tooSoon ? '—' : gbp(cost.totalP / days || 0)}</div><div class="sub">${
+          e7() ? `${Math.round((100 * iv.nightKwh) / (iv.kwh || 1))}% night` : '&nbsp;'
+        }</div></div>
+      </div>
+      ${tooSoon ? `<div class="tiny" style="margin-top:6px">Only ${fmtSpan(iv.to - iv.from)} since the last reading. Hourly and daily figures appear once readings are ${MIN_RATE_HOURS}+ hours apart.</div>` : ''}
       ${cost.missingTariff ? '<div class="notice">No tariff covers all of this period yet. Add one in Settings.</div>' : ''}
       ${cost.noNightRate ? '<div class="notice">Your tariff has no night rate, so night units are charged at the normal rate. Set an Economy 7 tariff in Settings.</div>' : ''}`;
   };
@@ -391,6 +509,7 @@ function renderAdd() {
     const img = $('#preview');
     img.src = image.dataUrl;
     img.hidden = false;
+    $('#vf-hint').hidden = true;
     if (!aiAvailable(getState().settings.ai)) {
       statusEl.textContent = 'Type the reading from the photo below.';
       (e7() ? $('#day') : $('#value')).focus();
@@ -503,7 +622,7 @@ function renderHistory() {
       readings.length
         ? `<ul class="list">${readings
             .map(
-              (r) => `<li><div class="main"><div><strong>${describeReading(r, historyFuel)}</strong>${r.reset ? ' <span class="badge">new meter</span>' : ''}</div>
+              (r) => `<li><div class="main"><div><strong class="mono">${describeReading(r, historyFuel)}</strong>${r.reset ? ' <span class="badge">new meter</span>' : ''}</div>
                 <div class="tiny">${fmtDateTime(r.at)} · ${r.source === 'photo' ? 'from photo' : 'typed'}</div></div>
                 <button class="btn danger small" data-del="${esc(r.id)}" aria-label="Delete reading">Delete</button></li>`,
             )
@@ -653,6 +772,16 @@ function renderSettings() {
       </div>
     </div>
 
+    <h2>Appearance</h2>
+    <div class="card">
+      <label for="theme">Theme</label>
+      <select id="theme">
+        <option value="dark" ${(s.settings.theme || 'dark') === 'dark' ? 'selected' : ''}>Dark</option>
+        <option value="light" ${s.settings.theme === 'light' ? 'selected' : ''}>Light</option>
+        <option value="system" ${s.settings.theme === 'system' ? 'selected' : ''}>Match iPhone</option>
+      </select>
+    </div>
+
     <h2>Share with family</h2>
     <div class="card">
       <p class="small">Send someone a link. They open it in Safari, tap <strong>Share</strong> then <strong>Add to Home Screen</strong>. Their readings stay on their own phone.</p>
@@ -749,6 +878,12 @@ function renderSettings() {
   bindAi('#helper-url', 'helperUrl', (v) => v.trim().replace(/\/$/, ''));
   bindAi('#access-code', 'accessCode');
   bindAi('#api-key', 'apiKey');
+
+  // Appearance
+  view.querySelector('#theme').addEventListener('change', (e) => {
+    update((st) => (st.settings.theme = e.target.value));
+    applyTheme();
+  });
 
   // Share
   view.querySelector('#share').addEventListener('click', async () => {
@@ -1009,6 +1144,7 @@ function handleJoinLink() {
 
 // ---------- boot ----------
 
+applyTheme();
 handleJoinLink();
 window.addEventListener('hashchange', route);
 route();

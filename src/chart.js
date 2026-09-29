@@ -107,3 +107,43 @@ export function renderDailyChart(el, days) {
   });
   wrap.addEventListener('pointerleave', (e) => e.pointerType === 'mouse' && hide());
 }
+
+/**
+ * Ring gauge: coloured segments (fractions of a full circle, 0–1) on a track,
+ * with a 2px gap between segments. Colours are CSS custom properties.
+ * @param {{frac:number, color:string}[]} parts
+ */
+export function ringSvg(parts, { size = 140, stroke = 14, gap = 2 } = {}) {
+  const r = (size - stroke) / 2;
+  const c = 2 * Math.PI * r;
+  const total = parts.reduce((t, p) => t + p.frac, 0);
+  const scale = total > 1 ? 1 / total : 1;
+  let offset = 0;
+  let out = `<svg viewBox="0 0 ${size} ${size}" width="${size}" height="${size}" aria-hidden="true">
+    <circle cx="${size / 2}" cy="${size / 2}" r="${r}" fill="none" style="stroke:var(--track)" stroke-width="${stroke}"/>`;
+  const shown = parts.filter((p) => p.frac > 0);
+  shown.forEach((p, i) => {
+    const arc = c * p.frac * scale;
+    const len = Math.max(0, arc - (i < shown.length - 1 ? gap : 0));
+    out += `<circle cx="${size / 2}" cy="${size / 2}" r="${r}" fill="none" style="stroke:${p.color}" stroke-width="${stroke}"
+      stroke-dasharray="${len} ${c}" stroke-dashoffset="${-offset}"/>`;
+    offset += arc;
+  });
+  return out + '</svg>';
+}
+
+/** Small trend line with a marker on the latest point. */
+export function sparkSvg(values, color, { w = 120, h = 44 } = {}) {
+  if (values.length < 2) return '';
+  const max = Math.max(...values);
+  const min = Math.min(...values);
+  const span = max - min || 1;
+  const pts = values.map((v, i) => [(i / (values.length - 1)) * (w - 10) + 5, h - 6 - ((v - min) / span) * (h - 12)]);
+  const d = pts.map((p, i) => (i ? 'L' : 'M') + p[0].toFixed(1) + ',' + p[1].toFixed(1)).join('');
+  const [lx, ly] = pts[pts.length - 1];
+  return `<svg viewBox="0 0 ${w} ${h}" width="${w}" height="${h}" aria-hidden="true">
+    <path d="${d}L${lx},${h}L${pts[0][0]},${h}Z" style="fill:${color};opacity:.14"/>
+    <path d="${d}" fill="none" style="stroke:${color}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+    <circle cx="${lx}" cy="${ly}" r="4" style="fill:${color};stroke:var(--surface)" stroke-width="2"/>
+  </svg>`;
+}

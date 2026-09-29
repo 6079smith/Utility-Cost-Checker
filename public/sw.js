@@ -1,6 +1,6 @@
 // Offline support: pages are network-first (so updates arrive straight away),
 // built assets are cache-first (their filenames change when they change).
-const CACHE = 'meter-costs-v1';
+const CACHE = 'meter-costs-v2';
 
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(['./', './manifest.webmanifest'])));

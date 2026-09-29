@@ -1,4 +1,32 @@
+/* Dark is the default look; the app sets data-theme="light" or "dark" on
+   <html> from Settings → Appearance (or the iPhone setting). */
 :root {
+  color-scheme: dark;
+  --bg: #0e0e0d;
+  --surface: #1a1a19;
+  --surface-2: #242422;
+  --border: #2e2e2b;
+  --text: #ffffff;
+  --text-2: #c3c2b7;
+  --text-3: #8d8c84;
+  --accent: #3987e5;
+  --accent-ink: #ffffff;
+  --elec: #3987e5;
+  --gas: #d95926;
+  --track: #2a2a28;
+  --dig-bg: #000000;
+  --dig-border: #3a3a37;
+  --dig-ink: #f2f2ea;
+  --warn-bg: #3a2e0c;
+  --warn-ink: #f5d27a;
+  --bad: #ff7b7a;
+  --good: #5cd18b;
+  --shadow: none;
+  --radius: 18px;
+  --mono: 'Azeret Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, 'Segoe UI', Roboto, sans-serif;
+}
+:root[data-theme='light'] {
   color-scheme: light;
   --bg: #f6f5f1;
   --surface: #fcfcfb;
@@ -8,57 +36,21 @@
   --text-2: #52514e;
   --text-3: #75746f;
   --accent: #2a78d6;
-  --accent-ink: #ffffff;
   --elec: #2a78d6;
   --gas: #eb6834;
+  --track: #e6e4dd;
+  --dig-bg: #1d1d1c;
+  --dig-border: #1d1d1c;
+  --dig-ink: #f7f7f2;
   --warn-bg: #fff4d6;
   --warn-ink: #6b4a00;
   --bad: #c62f2e;
   --good: #0f7a3a;
-  --radius: 14px;
   --shadow: 0 1px 2px rgb(0 0 0 / 0.05), 0 1px 1px rgb(0 0 0 / 0.03);
-  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, 'Segoe UI', Roboto, sans-serif;
-}
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme='light']) {
-    color-scheme: dark;
-    --bg: #161615;
-    --surface: #1f1f1e;
-    --surface-2: #2a2a28;
-    --border: #3a3a37;
-    --text: #ffffff;
-    --text-2: #c3c2b7;
-    --text-3: #9a998f;
-    --accent: #3987e5;
-    --elec: #3987e5;
-    --gas: #d95926;
-    --warn-bg: #3a2e0c;
-    --warn-ink: #f5d27a;
-    --bad: #ff7b7a;
-    --good: #5cd18b;
-    --shadow: none;
-  }
-}
-:root[data-theme='dark'] {
-  color-scheme: dark;
-  --bg: #161615;
-  --surface: #1f1f1e;
-  --surface-2: #2a2a28;
-  --border: #3a3a37;
-  --text: #ffffff;
-  --text-2: #c3c2b7;
-  --text-3: #9a998f;
-  --accent: #3987e5;
-  --elec: #3987e5;
-  --gas: #d95926;
-  --warn-bg: #3a2e0c;
-  --warn-ink: #f5d27a;
-  --bad: #ff7b7a;
-  --good: #5cd18b;
-  --shadow: none;
 }
 
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
 html { -webkit-text-size-adjust: 100%; }
 body {
   margin: 0;
@@ -268,3 +260,74 @@ th { color: var(--text-2); font-weight: 500; }
 ol.steps { padding-left: 20px; margin: 8px 0 0; }
 ol.steps li { margin-bottom: 6px; }
 .share-icon { display: inline-block; width: 16px; height: 16px; vertical-align: -2px; }
+
+/* ---------- Meter display look ---------- */
+.mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+.digits { display: flex; gap: 3px; align-items: center; }
+.digits span {
+  font-family: var(--mono);
+  font-weight: 500;
+  font-size: 22px;
+  width: 26px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  background: var(--dig-bg);
+  color: var(--dig-ink);
+  border: 1px solid var(--dig-border);
+  border-radius: 5px;
+}
+.digits span.sep { width: auto; background: none; border: 0; color: var(--text-2); font-size: 18px; padding: 0 1px; }
+.digits span.frac { background: none; border-color: var(--border); color: var(--text-2); }
+.digits .unit { width: auto; height: auto; background: none; border: 0; font-size: 12px; color: var(--text-3); align-self: flex-end; padding-left: 4px; }
+.digits.big span { width: 40px; height: 52px; font-size: 30px; border-radius: 7px; }
+.digits.big span.cur { border-color: var(--accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 40%, transparent); }
+.digits.big span.empty { color: transparent; }
+
+.reg { display: flex; align-items: center; gap: 10px; margin-top: 10px; }
+.reg .lab { width: 46px; font-size: 10px; color: var(--text-3); font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; }
+
+.dig-input { position: relative; display: inline-block; max-width: 100%; }
+.dig-input input {
+  position: absolute; inset: 0; width: 100%; height: 100%;
+  opacity: 0; font-size: 16px; caret-color: transparent; border: 0; padding: 0; cursor: text;
+}
+.dig-input .digits { flex-wrap: nowrap; }
+
+.caps { font-size: 11px; color: var(--text-3); font-weight: 600; text-transform: uppercase; letter-spacing: 0.07em; }
+.fuel-head { display: flex; align-items: center; gap: 8px; font-weight: 700; font-size: 16px; }
+.fuel-head .tag { font-size: 11px; color: var(--text-3); font-weight: 500; }
+.fuel-head .when { margin-left: auto; font-size: 12px; color: var(--text-3); font-weight: 500; }
+.fuel-sum { display: flex; justify-content: space-between; align-items: flex-end; gap: 8px; margin-top: 14px; }
+.fuel-sum .amt { font-size: 30px; font-weight: 700; letter-spacing: -0.02em; line-height: 1.1; font-variant-numeric: tabular-nums; }
+.spark { flex: none; text-align: right; }
+.spark svg { display: block; }
+
+.tiles .tile .label { text-transform: uppercase; letter-spacing: 0.05em; font-size: 11px; font-weight: 600; color: var(--text-3); }
+.tile .value { font-size: 18px; }
+
+.gauge { display: flex; align-items: center; gap: 16px; }
+.gauge-ring { position: relative; flex: none; width: 140px; height: 140px; }
+.gauge-ring svg { display: block; transform: rotate(-90deg); }
+.gauge-mid { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; }
+.gauge-mid .v { font-size: 28px; font-weight: 700; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+.gauge-mid .s { font-size: 11px; color: var(--text-3); line-height: 1.25; }
+.gauge-side { min-width: 0; }
+.gauge-side .v { font-size: 26px; font-weight: 700; letter-spacing: -0.02em; margin: 2px 0 10px; font-variant-numeric: tabular-nums; }
+.key { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--text-2); }
+.key span { display: inline-flex; align-items: center; gap: 6px; }
+
+.viewfinder { position: relative; border-radius: 16px; overflow: hidden; background: var(--surface-2); min-height: 170px; display: grid; place-items: center; }
+.viewfinder img { display: block; width: 100%; max-height: 280px; object-fit: contain; }
+.viewfinder .hint { color: var(--text-3); font-size: 14px; text-align: center; padding: 24px; }
+.viewfinder::after {
+  content: ''; position: absolute; inset: 10px; pointer-events: none;
+  border: 2px solid color-mix(in srgb, var(--text) 70%, transparent); border-radius: 12px;
+  clip-path: polygon(0 0,18% 0,18% 3px,82% 3px,82% 0,100% 0,100% 18%,calc(100% - 3px) 18%,calc(100% - 3px) 82%,100% 82%,100% 100%,82% 100%,82% calc(100% - 3px),18% calc(100% - 3px),18% 100%,0 100%,0 82%,3px 82%,3px 18%,0 18%);
+}
+.shutter { display: flex; flex-direction: column; align-items: center; gap: 6px; margin-top: 14px; cursor: pointer; color: var(--text-2); font-size: 13px; font-weight: 500; }
+.shutter i { width: 66px; height: 66px; border-radius: 50%; border: 4px solid var(--text); display: grid; place-items: center; }
+.shutter i::after { content: ''; width: 50px; height: 50px; border-radius: 50%; background: var(--text); }
+.shutter:active i::after { transform: scale(0.92); }
+.found { font-size: 13px; color: var(--text-2); margin-top: 12px; }
+.found .ok { color: var(--good); font-weight: 600; }

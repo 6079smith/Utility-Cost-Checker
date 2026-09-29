@@ -12,6 +12,8 @@ const defaults = () => ({
     region: '',
     vatRate: 0.05,
     paymentMethod: 'DIRECT_DEBIT',
+    // 'dark' (default), 'light' or 'system' (follow the iPhone setting).
+    theme: 'dark',
     gas: { units: 'm3', calorificValue: 39.5 },
     // meter: 'single' or 'e7' (Economy 7: day + night registers).
     electricity: { meter: 'single', rate1Is: 'night' },
