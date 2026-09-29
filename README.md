@@ -5,6 +5,7 @@ An iPhone-friendly web app for households in England, Scotland and Wales. Photog
 - **Installs like an app.** Open the link in Safari, tap **Share → Add to Home Screen**. No App Store.
 - **AI meter reading.** Take a photo and Claude reads the digits. You check them, then save. Typing the reading is always an option.
 - **Octopus prices fetched automatically.** It uses Octopus's public API and picks up price changes, such as each quarterly price-cap change.
+- **Economy 7.** Day and night registers are read and charged at their own rates. That works with Octopus (fetched automatically) and with rates typed from any other supplier's bill.
 - **Any other supplier.** Type the unit rate and standing charge from your bill. When you switch supplier, earlier readings keep the old prices.
 - **Private.** Readings live only on each phone. Family members each install it and track their own home.
 
@@ -13,6 +14,7 @@ An iPhone-friendly web app for households in England, Scotland and Wales. Photog
 | Item | How it's handled |
 |---|---|
 | Electricity | Meter reads kWh directly |
+| Economy 7 | Day register × day rate + night register × night rate (one standing charge) |
 | Gas | `m³ × 1.02264 × calorific value ÷ 3.6 = kWh` (the calorific value is on your bill, default 39.5). Imperial meters: hundreds of ft³ × 2.83 = m³ |
 | Unit rate | p/kWh × kWh used |
 | Standing charge | p/day × days (pro-rata to the minute) |
@@ -54,9 +56,15 @@ In **Settings → Share with family**, tap **Share app link** (tick "Include pho
 
 ## First use
 
-1. **Settings**: enter your postcode and tap **Find** to set your region. Set each tariff: pick your Octopus tariff from the list (or type the product code shown in your Octopus account), or choose **Other supplier** and type the prices from your bill.
+1. **Settings**: enter your postcode and tap **Find** to set your region. Under **Electricity meter**, choose *Single rate* or *Economy 7*. Set each tariff: pick your Octopus tariff from the list (or type the product code shown in your Octopus account), or choose **Other supplier** and type the prices from your bill.
 2. **Add reading**: photograph each meter.
 3. A day or more later, add another reading. You'll see the cost per hour, day and week.
+
+**Economy 7 meters:**
+- **Dial meters** show both rows, usually labelled *Low* (night) and *Normal* (day), and one photo reads both.
+- **Digital meters** show one rate at a time: press the button on the meter to show the other rate and take a second photo.
+- **"Rate 1" and "Rate 2" labels** don't mean the same thing on every meter. Set which one is night in Settings; your bill will tell you (the cheaper one is night).
+- **Swapped readings** are flagged: if day and night look the wrong way round compared with your last reading, the app offers to swap them.
 
 **Changing supplier:** Settings → *Change tariff or supplier* → set the date the new tariff started.
 
@@ -75,6 +83,7 @@ npm run build   # production build in dist/
 |---|---|
 | `src/calc.js` | Pure cost engine: gas conversion, tariff segments, pro-rata costing, daily buckets |
 | `src/octopus.js` | Octopus region lookup, product list, unit rates and standing charges |
+| `src/registers.js` | Maps register labels (Low/Normal, Rate 1/2, 1.8.1/1.8.2) to Economy 7 day/night |
 | `src/meterPrompt.js` | Claude prompt and JSON schema for meter reading (shared with the Worker) |
 | `src/meterReader.js` | Photo resize and call to the helper (or directly with your own API key) |
 | `src/store.js` | On-device storage, tariff switching, backup |
@@ -83,6 +92,6 @@ npm run build   # production build in dist/
 
 ## Limitations
 
-- Single-rate meters only. Economy 7 (two registers) isn't split into day/night yet.
+- Economy 10, Economy 7 with a separate heating circuit, and other multi-rate tariffs aren't supported.
 - Estimates only. Your bill uses your supplier's readings and rounding.
 - With traditional meters, "per hour" is the average over the time between two readings, not a live hourly figure.

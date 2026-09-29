@@ -8,6 +8,7 @@ import {
   tariffsFor,
   currentTariff,
   switchTariff,
+  isEconomy7,
   exportJson,
   importJson,
   requestPersistence,
@@ -16,6 +17,7 @@ import { analyseFuel, buildIntervals, toKwh, sumDays, recentDailyAverage, dayKey
 import { REGIONS, regionForPostcode, listProducts, fetchRates } from './octopus.js';
 import { prepareImage, readMeter, aiAvailable } from './meterReader.js';
 import { renderDailyChart } from './chart.js';
+import { classifyLabel, mapRegisters, looksSwapped } from './registers.js';
 
 const view = document.getElementById('view');
 const title = document.getElementById('page-title');
@@ -147,19 +149,27 @@ function renderHome() {
     if (!last) {
       html += `<p class="muted">No readings yet.</p><a class="btn secondary" href="#add?fuel=${fuel}">Add first reading</a>`;
     } else if (!latest) {
-      html += `<p class="muted">Last reading ${num(last.value, 0)} ${meterUnit(fuel)} on ${fmtDate(last.at)}. Add another reading to see usage and cost.</p>
+      html += `<p class="muted">Last reading ${describeReading(last, fuel)} on ${fmtDate(last.at)}. Add another reading to see usage and cost.</p>
         <a class="btn secondary" href="#add?fuel=${fuel}">Add reading</a>`;
     } else {
       const r = latest.rates;
       html += `<div class="hero-label">Since ${fmtDateTime(latest.from)} (${num(r.days, 1)} days)</div>
         <div class="hero" style="font-size:34px">${gbp(latest.cost.totalP)}</div>
-        <div class="muted small">${num(latest.kwh, 1)} kWh${fuel === 'gas' ? ` (${num(latest.units, 2)} ${meterUnit(fuel)})` : ''}</div>
+        <div class="muted small">${num(latest.kwh, 1)} kWh${fuel === 'gas' ? ` (${num(latest.units, 2)} ${meterUnit(fuel)})` : ''}${
+          latest.nightUnits !== undefined
+            ? `: day ${num(latest.dayKwh, 1)} · night ${num(latest.nightKwh, 1)} (${Math.round((100 * latest.nightKwh) / (latest.kwh || 1))}% at night)`
+            : ''
+        }</div>
         <div class="tiles">
           <div class="tile"><div class="label">Per hour</div><div class="value">${pence(r.perHour.costP)}</div><div class="sub">${num(r.perHour.kwh, 2)} kWh</div></div>
           <div class="tile"><div class="label">Per day</div><div class="value">${gbp(r.perDay.costP)}</div><div class="sub">${num(r.perDay.kwh, 1)} kWh</div></div>
           <div class="tile"><div class="label">Per week</div><div class="value">${gbp(r.perWeek.costP)}</div><div class="sub">${num(r.perWeek.kwh, 0)} kWh</div></div>
         </div>`;
       if (latest.cost.missingTariff) html += `<div class="notice">Part of this period has no tariff set, so the cost is too low. Check the tariff start date in Settings.</div>`;
+      if (latest.cost.noNightRate) html += `<div class="notice">Night units are being charged at the normal rate because your tariff has no night rate. <a href="#settings">Set an Economy 7 tariff</a>.</div>`;
+    }
+    if (last && fuel === 'electricity' && isEconomy7() !== (typeof last.night === 'number')) {
+      html += `<div class="notice">Your meter type changed to ${isEconomy7() ? 'Economy 7' : 'single rate'}. Usage will show again after two readings of the new type.</div>`;
     }
     html += '</div>';
   }
@@ -204,12 +214,18 @@ function drawChart(a) {
 
 // ---------- add reading ----------
 
+function describeReading(r, fuel) {
+  const dp = fuel === 'gas' ? 1 : 0;
+  if (typeof r.night === 'number') return `day ${num(r.value, dp)}, night ${num(r.night, dp)} ${meterUnit(fuel)}`;
+  return `${num(r.value, dp)} ${meterUnit(fuel)}`;
+}
+
 function renderAdd() {
   const params = new URLSearchParams(location.hash.split('?')[1] || '');
   const s = getState();
   let fuel = FUELS.includes(params.get('fuel')) ? params.get('fuel') : 'electricity';
-  const ai = s.settings.ai;
-  const canAi = aiAvailable(ai);
+  const canAi = aiAvailable(s.settings.ai);
+  const e7 = () => fuel === 'electricity' && isEconomy7();
 
   view.innerHTML = `
     <div class="segmented" role="group" aria-label="Meter">
@@ -221,13 +237,23 @@ function renderAdd() {
         Take photo of meter
       </label>
       <input id="photo" type="file" accept="image/*" capture="environment" hidden />
+      <p id="e7-photo-tip" class="tiny" style="margin-top:8px" hidden>Economy 7: if your meter is digital and shows one rate at a time, press its button to show the other rate and take a second photo. Each photo fills in whichever rate it shows.</p>
       ${canAi ? '' : '<p class="tiny" style="margin-top:8px">Photo reading isn’t set up on this phone, so type the numbers in below. You can set it up in Settings.</p>'}
       <img id="preview" class="photo-preview" alt="Meter photo" hidden />
       <div id="ai-status" class="small" style="margin-top:8px"></div>
     </div>
     <form id="reading-form" class="card" novalidate>
-      <label for="value">Meter reading (<span id="unit"></span>)</label>
-      <input id="value" class="big-input" inputmode="decimal" autocomplete="off" placeholder="00000" required />
+      <div id="single-fields">
+        <label for="value">Meter reading (<span class="unit"></span>)</label>
+        <input id="value" class="big-input" inputmode="decimal" autocomplete="off" placeholder="00000" />
+      </div>
+      <div id="e7-fields" hidden>
+        <div class="row">
+          <div><label for="day">Day / Normal (kWh)</label><input id="day" class="big-input" inputmode="decimal" autocomplete="off" placeholder="00000" /></div>
+          <div><label for="night">Night / Low (kWh)</label><input id="night" class="big-input" inputmode="decimal" autocomplete="off" placeholder="00000" /></div>
+        </div>
+        <button type="button" class="linkish" id="swap">⇄ Swap day and night</button>
+      </div>
       <p id="prev" class="tiny" style="margin-top:6px"></p>
       <label for="at">Date and time of reading</label>
       <input id="at" type="datetime-local" value="${localInputValue(Date.now())}" required />
@@ -237,51 +263,75 @@ function renderAdd() {
       <button class="btn" type="submit">Save reading</button>
     </form>`;
 
-  const valueEl = view.querySelector('#value');
-  const atEl = view.querySelector('#at');
-  const resetEl = view.querySelector('#reset');
-  const statusEl = view.querySelector('#ai-status');
-  const estimateEl = view.querySelector('#estimate');
-  const errEl = view.querySelector('#form-error');
+  const $ = (sel) => view.querySelector(sel);
+  const atEl = $('#at');
+  const resetEl = $('#reset');
+  const statusEl = $('#ai-status');
+  const estimateEl = $('#estimate');
+  const errEl = $('#form-error');
   let source = 'manual';
 
-  const parseValue = () => {
-    const v = parseFloat(valueEl.value.replace(/[,\s]/g, ''));
+  const parse = (el) => {
+    const v = parseFloat(el.value.replace(/[,\s]/g, ''));
     return Number.isFinite(v) ? v : null;
   };
+  /** The reading being entered, or null if incomplete. */
+  const draft = () => {
+    if (e7()) {
+      const day = parse($('#day'));
+      const night = parse($('#night'));
+      return day === null || night === null ? null : { value: day, night };
+    }
+    const v = parse($('#value'));
+    return v === null ? null : { value: v };
+  };
+  const goesBackwards = (d, prev) =>
+    prev && (d.value < prev.value || (typeof d.night === 'number' && typeof prev.night === 'number' && d.night < prev.night));
 
   const refresh = () => {
     view.querySelectorAll('[data-fuel]').forEach((b) => b.setAttribute('aria-pressed', b.dataset.fuel === fuel));
-    view.querySelector('#unit').textContent = meterUnit(fuel);
+    view.querySelectorAll('.unit').forEach((u) => (u.textContent = meterUnit(fuel)));
+    $('#single-fields').hidden = e7();
+    $('#e7-fields').hidden = !e7();
+    $('#e7-photo-tip').hidden = !e7();
     const at = Date.parse(atEl.value);
     const prev = lastReading(fuel, Number.isFinite(at) ? at : Infinity);
-    view.querySelector('#prev').textContent = prev
-      ? `Previous: ${num(prev.value, fuel === 'gas' ? 1 : 0)} ${meterUnit(fuel)} on ${fmtDateTime(prev.at)}`
-      : 'This is your first reading for this meter.';
-    const v = parseValue();
+    const prevEl = $('#prev');
+    prevEl.textContent = prev ? `Previous: ${describeReading(prev, fuel)} on ${fmtDateTime(prev.at)}` : 'This is your first reading for this meter.';
+    const typeChanged = prev && fuel === 'electricity' && (typeof prev.night === 'number') !== e7();
+    if (typeChanged) prevEl.textContent += e7() ? '. That was a single-rate reading, so Economy 7 counting starts from this one.' : '. That was an Economy 7 reading, so single-rate counting starts from this one.';
+
     errEl.textContent = '';
     estimateEl.innerHTML = '';
-    if (v === null || !prev || resetEl.checked || !Number.isFinite(at)) return;
-    if (v < prev.value) {
+    const d = draft();
+    if (e7() && d && looksSwapped(d.value, d.night, prev) && !resetEl.checked) {
+      estimateEl.innerHTML = `<div class="notice">Day and night look the wrong way round compared with last time. <button type="button" class="linkish" data-swap>Swap them</button></div>`;
+      estimateEl.querySelector('[data-swap]').addEventListener('click', swap);
+      return;
+    }
+    if (!d || !prev || resetEl.checked || typeChanged || !Number.isFinite(at)) return;
+    if (goesBackwards(d, prev)) {
       estimateEl.innerHTML = `<div class="notice">That’s lower than the previous reading. Check the digits, or tick “New or replaced meter”.</div>`;
       return;
     }
     const st = getState();
-    const [iv] = buildIntervals(
-      [
-        { ...prev, id: 'p' },
-        { id: 'n', fuel, at: new Date(at).toISOString(), value: v },
-      ],
-      fuel,
-      st.settings.gas,
-    );
+    const [iv] = buildIntervals([{ ...prev, id: 'p' }, { id: 'n', fuel, at: new Date(at).toISOString(), ...d }], fuel, st.settings.gas);
     if (!iv) return;
     const cost = costInterval(iv, tariffSegments(st.tariffs, fuel), st.settings.vatRate);
     const days = (iv.to - iv.from) / DAY;
-    estimateEl.innerHTML = `<strong>${num(iv.kwh, 1)} kWh</strong> used in ${num(days, 1)} days ≈ <strong>${gbp(cost.totalP)}</strong>
-      <span class="muted">(${gbp((cost.totalP / days) || 0)}/day)</span>
-      ${cost.missingTariff ? '<div class="notice">No tariff covers all of this period yet. Add one in Settings.</div>' : ''}`;
+    const split = e7() ? ` <span class="muted">(${num(iv.dayKwh, 1)} day + ${num(iv.nightKwh, 1)} night)</span>` : '';
+    estimateEl.innerHTML = `<strong>${num(iv.kwh, 1)} kWh</strong>${split} used in ${num(days, 1)} days ≈ <strong>${gbp(cost.totalP)}</strong>
+      <span class="muted">(${gbp(cost.totalP / days || 0)}/day)</span>
+      ${cost.missingTariff ? '<div class="notice">No tariff covers all of this period yet. Add one in Settings.</div>' : ''}
+      ${cost.noNightRate ? '<div class="notice">Your tariff has no night rate, so night units are charged at the normal rate. Set an Economy 7 tariff in Settings.</div>' : ''}`;
   };
+
+  function swap() {
+    const day = $('#day').value;
+    $('#day').value = $('#night').value;
+    $('#night').value = day;
+    refresh();
+  }
 
   view.querySelectorAll('[data-fuel]').forEach((b) =>
     b.addEventListener('click', () => {
@@ -289,10 +339,13 @@ function renderAdd() {
       refresh();
     }),
   );
-  [valueEl, atEl, resetEl].forEach((el) => el.addEventListener('input', () => { if (el === valueEl) source = 'manual'; refresh(); }));
+  $('#swap').addEventListener('click', swap);
+  for (const el of [$('#value'), $('#day'), $('#night')]) el.addEventListener('input', () => ((source = 'manual'), refresh()));
+  [atEl, resetEl].forEach((el) => el.addEventListener('input', refresh));
 
-  view.querySelector('#photo').addEventListener('change', async (e) => {
+  $('#photo').addEventListener('change', async (e) => {
     const file = e.target.files?.[0];
+    e.target.value = '';
     if (!file) return;
     atEl.value = localInputValue(file.lastModified && Date.now() - file.lastModified < 7 * DAY ? file.lastModified : Date.now());
     let image;
@@ -302,56 +355,81 @@ function renderAdd() {
       statusEl.innerHTML = '<span class="error">Couldn’t open that photo.</span>';
       return;
     }
-    const img = view.querySelector('#preview');
+    const img = $('#preview');
     img.src = image.dataUrl;
     img.hidden = false;
     if (!aiAvailable(getState().settings.ai)) {
       statusEl.textContent = 'Type the reading from the photo below.';
-      valueEl.focus();
+      (e7() ? $('#day') : $('#value')).focus();
       return;
     }
     statusEl.innerHTML = '<span class="spinner"></span> Reading the meter…';
     try {
       const prev = lastReading(fuel);
-      const result = await readMeter({ image, fuel, previous: prev?.value ?? null, ai: getState().settings.ai });
-      if (result.value == null) {
+      const result = await readMeter({
+        image,
+        fuel,
+        economy7: e7(),
+        previous: prev ? describeReading(prev, fuel) : null,
+        ai: getState().settings.ai,
+      });
+      const regs = (result.registers || []).filter((r) => Number.isFinite(r.value));
+      if (!regs.length) {
         statusEl.innerHTML = `<span class="error">Couldn’t read the numbers.</span> ${esc(result.notes)} Please type them in.`;
-        valueEl.focus();
         return;
       }
-      valueEl.value = String(result.value);
-      source = 'photo';
+      let html = '';
       if (result.meter_kind !== 'unknown' && result.meter_kind !== fuel) {
-        statusEl.innerHTML = `<div class="notice">This looks like a ${esc(result.meter_kind)} meter. Switch meter above if so.</div>`;
+        html += `<div class="notice">This looks like a ${esc(result.meter_kind)} meter. Switch meter above if so.</div>`;
+      }
+      if (e7()) {
+        const mapped = mapRegisters(regs, getState().settings.electricity.rate1Is);
+        if (mapped.day !== null) $('#day').value = String(mapped.day);
+        if (mapped.night !== null) $('#night').value = String(mapped.night);
+        html += `Read ${regs.map((r) => `<strong>${esc(r.label)}</strong> ${esc(r.digits)}`).join(', ')}
+          <span class="badge ${esc(result.confidence)}">${esc(result.confidence)} confidence</span>`;
+        if (mapped.ambiguous) html += `<div class="notice">Couldn’t tell which is day and which is night. Check the boxes below, and use “Swap” if needed.</div>`;
+        else if (regs.some((r) => /^rate[12]$/.test(classifyLabel(r.label)))) {
+          html += `<div class="tiny">Counting Rate 1 as ${getState().settings.electricity.rate1Is} (change in Settings if your bill says otherwise).</div>`;
+        }
+        if (mapped.day === null || mapped.night === null) {
+          html += `<div class="tiny">Only one rate was visible. Press the button on your meter to show the other rate, then take another photo (or type it in).</div>`;
+        }
       } else {
-        statusEl.innerHTML = '';
+        $('#value').value = String(regs[0].value);
+        html += `Read <strong>${esc(regs[0].digits)}</strong> <span class="badge ${esc(result.confidence)}">${esc(result.confidence)} confidence</span>`;
+        if (fuel === 'electricity' && regs.length > 1) {
+          html += `<div class="notice">This meter shows ${regs.length} rates, so it may be Economy 7. Switch “Electricity meter” to Economy 7 in Settings.</div>`;
+        }
       }
-      statusEl.innerHTML += `Read <strong>${esc(result.digits)}</strong> <span class="badge ${esc(result.confidence)}">${esc(result.confidence)} confidence</span>
-        ${result.notes ? `<div class="tiny" style="margin-top:4px">${esc(result.notes)}</div>` : ''}
-        <div class="tiny">Check it matches the black digits on your meter before saving.</div>`;
+      source = 'photo';
+      if (result.notes) html += `<div class="tiny" style="margin-top:4px">${esc(result.notes)}</div>`;
+      html += '<div class="tiny">Check it matches the black digits on your meter before saving.</div>';
       if (fuel === 'gas' && ['m3', 'ft3'].includes(result.unit) && result.unit !== getState().settings.gas.units) {
-        statusEl.innerHTML += `<div class="notice">Your meter looks like it reads in ${result.unit === 'ft3' ? 'hundreds of cubic feet' : 'cubic metres'}. Change “Gas meter units” in Settings if so.</div>`;
+        html += `<div class="notice">Your meter looks like it reads in ${result.unit === 'ft3' ? 'hundreds of cubic feet' : 'cubic metres'}. Change “Gas meter units” in Settings if so.</div>`;
       }
+      statusEl.innerHTML = html;
       refresh();
     } catch (err) {
       statusEl.innerHTML = `<span class="error">${esc(err.message)}</span>`;
-      valueEl.focus();
     }
   });
 
-  view.querySelector('#reading-form').addEventListener('submit', async (e) => {
+  $('#reading-form').addEventListener('submit', async (e) => {
     e.preventDefault();
-    const v = parseValue();
+    const d = draft();
     const at = Date.parse(atEl.value);
-    if (v === null || v < 0) return (errEl.textContent = 'Enter the reading shown on the meter.');
+    if (!d || d.value < 0 || d.night < 0) {
+      return (errEl.textContent = e7() ? 'Enter both the day and night readings.' : 'Enter the reading shown on the meter.');
+    }
     if (!Number.isFinite(at)) return (errEl.textContent = 'Enter the date and time.');
     if (at > Date.now() + 5 * 60e3) return (errEl.textContent = 'That time is in the future.');
     const prev = lastReading(fuel, at);
-    if (prev && v < prev.value && !resetEl.checked) {
+    if (goesBackwards(d, prev) && !resetEl.checked) {
       return (errEl.textContent = 'Lower than the previous reading. Check it, or tick “New or replaced meter”.');
     }
     update((st) => {
-      st.readings.push({ id: uid(), fuel, at: new Date(at).toISOString(), value: v, source, reset: resetEl.checked || undefined });
+      st.readings.push({ id: uid(), fuel, at: new Date(at).toISOString(), ...d, source, reset: resetEl.checked || undefined });
     });
     requestPersistence();
     toast(`${fuelName(fuel)} reading saved`);
@@ -381,7 +459,7 @@ function renderHistory() {
         ? `<ul class="list">${intervals
             .map(
               (iv) => `<li><div class="main"><div>${fmtDate(iv.from)} – ${fmtDate(iv.to)}</div>
-                <div class="tiny">${num(iv.kwh, 1)} kWh · ${num(iv.rates.days, 1)} days · ${gbp(iv.rates.perDay.costP)}/day</div></div>
+                <div class="tiny">${num(iv.kwh, 1)} kWh${iv.nightUnits !== undefined ? ` (${num(iv.nightKwh, 1)} night)` : ''} · ${num(iv.rates.days, 1)} days · ${gbp(iv.rates.perDay.costP)}/day</div></div>
                 <div class="amount">${gbp(iv.cost.totalP)}${iv.cost.missingTariff ? '<div class="tiny">tariff missing</div>' : ''}</div></li>`,
             )
             .join('')}</ul>`
@@ -392,7 +470,7 @@ function renderHistory() {
       readings.length
         ? `<ul class="list">${readings
             .map(
-              (r) => `<li><div class="main"><div><strong>${num(r.value, historyFuel === 'gas' ? 1 : 0)}</strong> ${meterUnit(historyFuel)}${r.reset ? ' <span class="badge">new meter</span>' : ''}</div>
+              (r) => `<li><div class="main"><div><strong>${describeReading(r, historyFuel)}</strong>${r.reset ? ' <span class="badge">new meter</span>' : ''}</div>
                 <div class="tiny">${fmtDateTime(r.at)} · ${r.source === 'photo' ? 'from photo' : 'typed'}</div></div>
                 <button class="btn danger small" data-del="${esc(r.id)}" aria-label="Delete reading">Delete</button></li>`,
             )
@@ -418,18 +496,35 @@ function renderHistory() {
 
 let productsCache = null;
 
+function priceText(unit, night, standing) {
+  const vat = 1 + getState().settings.vatRate;
+  const p = (v) => num(v * vat, 2);
+  const units = night != null ? `day ${p(unit)}p · night ${p(night)}p/kWh` : `${p(unit)}p/kWh`;
+  return `${units} · ${p(standing)}p/day inc. VAT`;
+}
+
 function tariffSummary(t) {
   if (!t) return '<span class="muted">Not set</span>';
-  const vat = 1 + getState().settings.vatRate;
   if (t.supplier === 'octopus') {
     const segs = tariffSegments([t], t.fuel);
     const cur = segs.find((s) => s.from <= Date.now() && (s.to === null || s.to > Date.now())) || segs[segs.length - 1];
-    const prices = cur ? `${num(cur.unit * vat, 2)}p/kWh · ${num(cur.standing * vat, 2)}p/day` : 'prices not loaded';
-    return `<strong>Octopus: ${esc(t.label || t.productCode)}</strong><div class="tiny">${esc(t.tariffCode || '')} · ${prices} inc. VAT${
+    const prices = cur ? priceText(cur.unit, cur.night, cur.standing) : 'prices not loaded';
+    return `<strong>Octopus: ${esc(t.label || t.productCode)}</strong><div class="tiny">${esc(t.tariffCode || '')} · ${prices}${
       t.fetchedAt ? ` · updated ${ago(Date.parse(t.fetchedAt))}` : ''
     }</div>`;
   }
-  return `<strong>${esc(t.label || 'Other supplier')}</strong><div class="tiny">${num(t.unitRate * vat, 2)}p/kWh · ${num(t.standingCharge * vat, 2)}p/day inc. VAT</div>`;
+  return `<strong>${esc(t.label || 'Other supplier')}</strong><div class="tiny">${priceText(t.unitRate, t.nightRate, t.standingCharge)}</div>`;
+}
+
+/** Warn when the electricity tariff doesn't match the meter type. */
+function tariffMismatch(fuel) {
+  const t = currentTariff(fuel);
+  if (fuel !== 'electricity' || !t) return '';
+  const tariffE7 = t.registers === 2 || t.nightRate != null;
+  if (tariffE7 === isEconomy7()) return '';
+  return `<div class="notice">Your meter is set to ${isEconomy7() ? 'Economy 7' : 'single rate'} but this tariff is ${
+    tariffE7 ? 'Economy 7' : 'single rate'
+  }. Tap “Change tariff” to set the matching one.</div>`;
 }
 
 function renderSettings() {
@@ -448,11 +543,29 @@ function renderSettings() {
       <div id="region-msg" class="small"></div>
     </div>
 
+    <h2>Electricity meter</h2>
+    <div class="card">
+      <label for="elec-meter">Meter type</label>
+      <select id="elec-meter">
+        <option value="single" ${s.settings.electricity.meter === 'single' ? 'selected' : ''}>Single rate (one reading)</option>
+        <option value="e7" ${s.settings.electricity.meter === 'e7' ? 'selected' : ''}>Economy 7 (day and night readings)</option>
+      </select>
+      <div id="rate1-wrap" ${s.settings.electricity.meter === 'e7' ? '' : 'hidden'}>
+        <label for="rate1">If your meter shows “Rate 1” and “Rate 2”, Rate 1 is…</label>
+        <select id="rate1">
+          <option value="night" ${s.settings.electricity.rate1Is === 'night' ? 'selected' : ''}>Night (low)</option>
+          <option value="day" ${s.settings.electricity.rate1Is === 'day' ? 'selected' : ''}>Day (normal)</option>
+        </select>
+        <p class="tiny" style="margin-top:6px">This differs between meters. Check a bill or your supplier app: whichever register has the lower price is night. Meters labelled “Low” and “Normal” don’t need this.</p>
+      </div>
+    </div>
+
     ${FUELS.map(
       (fuel) => `
       <h2>${fuelName(fuel)} tariff</h2>
       <div class="card" id="tariff-${fuel}">
         <div>${tariffSummary(currentTariff(fuel))}</div>
+        ${tariffMismatch(fuel)}
         <div class="row" style="margin-top:10px">
           ${currentTariff(fuel)?.supplier === 'octopus' ? `<button class="btn secondary small" data-refresh="${fuel}" type="button">Update prices</button>` : ''}
           <button class="btn secondary small" data-edit="${fuel}" type="button">${currentTariff(fuel) ? 'Change tariff or supplier' : 'Set tariff'}</button>
@@ -573,6 +686,15 @@ function renderSettings() {
     }),
   );
 
+  // Electricity meter type
+  view.querySelector('#elec-meter').addEventListener('change', (e) => {
+    update((st) => (st.settings.electricity.meter = e.target.value));
+    renderSettings();
+    const t = currentTariff('electricity');
+    if (t && (t.registers === 2 || t.nightRate != null) !== isEconomy7()) openTariffForm('electricity');
+  });
+  view.querySelector('#rate1').addEventListener('change', (e) => update((st) => (st.settings.electricity.rate1Is = e.target.value)));
+
   // Gas
   view.querySelector('#gas-units').addEventListener('change', (e) => update((st) => (st.settings.gas.units = e.target.value)));
   view.querySelector('#cv').addEventListener('change', (e) => {
@@ -652,9 +774,11 @@ function openTariffForm(fuel) {
   const card = view.querySelector(`#tariff-${fuel}`);
   const holder = card.querySelector('.tariff-form');
   const cur = currentTariff(fuel);
+  const e7 = fuel === 'electricity' && isEconomy7();
   const today = new Date();
   holder.innerHTML = `
     <form class="t-form" novalidate>
+      ${fuel === 'electricity' ? `<p class="small" style="margin-top:12px">Meter type: <strong>${e7 ? 'Economy 7' : 'single rate'}</strong> <span class="tiny">(change under Electricity meter)</span></p>` : ''}
       <label>Supplier</label>
       <div class="segmented" role="group">
         <button type="button" data-sup="octopus" aria-pressed="true">Octopus</button>
@@ -670,12 +794,20 @@ function openTariffForm(fuel) {
       <div data-part="manual" hidden>
         <label for="label-${fuel}">Supplier / tariff name</label>
         <input id="label-${fuel}" placeholder="e.g. British Gas Standard Variable" value="${cur?.supplier === 'manual' ? esc(cur.label) : ''}" />
-        <div class="row">
-          <div><label for="unit-${fuel}">Unit rate (p/kWh)</label><input id="unit-${fuel}" inputmode="decimal" placeholder="24.50" /></div>
-          <div><label for="stand-${fuel}">Standing charge (p/day)</label><input id="stand-${fuel}" inputmode="decimal" placeholder="60.12" /></div>
-        </div>
+        ${
+          e7
+            ? `<div class="row">
+                <div><label for="unit-${fuel}">Day rate (p/kWh)</label><input id="unit-${fuel}" inputmode="decimal" placeholder="30.10" /></div>
+                <div><label for="nightrate-${fuel}">Night rate (p/kWh)</label><input id="nightrate-${fuel}" inputmode="decimal" placeholder="15.20" /></div>
+              </div>
+              <label for="stand-${fuel}">Standing charge (p/day)</label><input id="stand-${fuel}" inputmode="decimal" placeholder="60.12" />`
+            : `<div class="row">
+                <div><label for="unit-${fuel}">Unit rate (p/kWh)</label><input id="unit-${fuel}" inputmode="decimal" placeholder="24.50" /></div>
+                <div><label for="stand-${fuel}">Standing charge (p/day)</label><input id="stand-${fuel}" inputmode="decimal" placeholder="60.12" /></div>
+              </div>`
+        }
         <label class="check" style="margin-top:12px"><input type="checkbox" id="incvat-${fuel}" checked /> These prices include VAT</label>
-        <p class="tiny" style="margin-top:6px">Both are on your bill or in your supplier app. Environmental and social levies are already built into these two prices.</p>
+        <p class="tiny" style="margin-top:6px">These are on your bill or in your supplier app. Environmental and social levies are already built into them.</p>
       </div>
       ${
         cur
@@ -726,14 +858,19 @@ function openTariffForm(fuel) {
     if (supplier === 'manual') {
       const unit = parseFloat(holder.querySelector(`#unit-${fuel}`).value);
       const stand = parseFloat(holder.querySelector(`#stand-${fuel}`).value);
-      if (!(unit > 0 && unit < 200) || !(stand >= 0 && stand < 500)) return (err.textContent = 'Enter the unit rate and standing charge in pence.');
+      const night = e7 ? parseFloat(holder.querySelector(`#nightrate-${fuel}`).value) : null;
+      if (!(unit > 0 && unit < 200) || !(stand >= 0 && stand < 500) || (e7 && !(night > 0 && night < 200))) {
+        return (err.textContent = e7 ? 'Enter the day rate, night rate and standing charge in pence.' : 'Enter the unit rate and standing charge in pence.');
+      }
       const div = holder.querySelector(`#incvat-${fuel}`).checked ? 1 + getState().settings.vatRate : 1;
       switchTariff({
         fuel,
         supplier: 'manual',
         from,
         label: holder.querySelector(`#label-${fuel}`).value.trim() || 'Other supplier',
+        registers: e7 ? 2 : 1,
         unitRate: unit / div,
+        nightRate: e7 ? night / div : null,
         standingCharge: stand / div,
       });
     } else {
@@ -749,6 +886,7 @@ function openTariffForm(fuel) {
         supplier: 'octopus',
         from,
         productCode: code,
+        registers: e7 ? 2 : 1,
         label: productsCache?.find((p) => p.code === code)?.name || code,
       };
       try {
@@ -780,12 +918,13 @@ async function loadOctopusRates(t) {
     fuel: t.fuel,
     productCode: t.productCode,
     region: s.region,
+    registers: t.registers ?? 1,
     sinceIso: since.toISOString(),
     paymentMethod: s.paymentMethod,
     proxyUrl: s.ai.helperUrl,
   });
   t.tariffCode = r.tariffCode;
-  t.rates = { unit: r.unit, standing: r.standing, since: since.toISOString() };
+  t.rates = { unit: r.unit, night: r.night, standing: r.standing, since: since.toISOString() };
   t.fetchedAt = new Date().toISOString();
 }
 

@@ -22,12 +22,12 @@ export function aiAvailable(ai) {
   return (ai.mode === 'helper' && !!ai.helperUrl) || (ai.mode === 'own-key' && !!ai.apiKey);
 }
 
-export async function readMeter({ image, fuel, previous, ai }) {
+export async function readMeter({ image, fuel, economy7 = false, previous, ai }) {
   if (ai.mode === 'helper') {
     const res = await fetch(ai.helperUrl.replace(/\/$/, '') + '/read-meter', {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'x-access-code': ai.accessCode || '' },
-      body: JSON.stringify({ imageBase64: image.base64, mediaType: image.mediaType, fuel, previous }),
+      body: JSON.stringify({ imageBase64: image.base64, mediaType: image.mediaType, fuel, economy7, previous }),
     });
     const body = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(body.error || `Meter reader returned ${res.status}`);
@@ -38,7 +38,7 @@ export async function readMeter({ image, fuel, previous, ai }) {
     const client = new Anthropic({ apiKey: ai.apiKey, dangerouslyAllowBrowser: true });
     try {
       const response = await client.beta.messages.create(
-        meterRequest({ imageBase64: image.base64, mediaType: image.mediaType, fuel, previous }),
+        meterRequest({ imageBase64: image.base64, mediaType: image.mediaType, fuel, economy7, previous }),
       );
       return parseMeterResponse(response);
     } catch (err) {

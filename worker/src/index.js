@@ -1,6 +1,6 @@
 // Cloudflare Worker that keeps your Claude API key off family phones.
 //
-//   POST /read-meter       photo → { digits, value, meter_kind, unit, confidence, notes }
+//   POST /read-meter       photo → { registers: [{label, digits, value}], meter_kind, unit, confidence, notes }
 //   GET  /octopus/v1/...   read-only pass-through to api.octopus.energy (CORS fallback)
 //
 // Secrets (set with `npx wrangler secret put NAME`):
@@ -49,7 +49,7 @@ export default {
       } catch {
         return json({ error: 'Invalid request.' }, 400);
       }
-      const { imageBase64, mediaType, fuel, previous } = body;
+      const { imageBase64, mediaType, fuel, economy7, previous } = body;
       if (typeof imageBase64 !== 'string' || !imageBase64 || imageBase64.length > MAX_IMAGE_BASE64) {
         return json({ error: 'Photo missing or too large.' }, 400);
       }
@@ -60,7 +60,14 @@ export default {
       const client = new Anthropic({ apiKey: env.ANTHROPIC_API_KEY });
       try {
         const response = await client.beta.messages.create(
-          meterRequest({ imageBase64, mediaType, fuel, previous: typeof previous === 'number' ? previous : null }),
+          meterRequest({
+            imageBase64,
+            mediaType,
+            fuel,
+            economy7: economy7 === true,
+            // A short description such as "day 12345, night 6789".
+            previous: typeof previous === 'string' ? previous.slice(0, 80) : typeof previous === 'number' ? String(previous) : null,
+          }),
         );
         return json(parseMeterResponse(response));
       } catch (err) {

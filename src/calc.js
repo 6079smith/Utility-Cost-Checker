@@ -26,8 +26,13 @@ export function toKwh(fuel, units, gas = {}) {
  * Turn readings for one fuel into consumption intervals between consecutive
  * readings. A reading flagged `reset` (new meter / meter replaced) starts a new
  * series and produces no interval.
+ *
+ * Economy 7 electricity readings carry a second register in `night`; `value`
+ * is then the day (normal) register. A pair where only one reading has a night
+ * register (the meter type changed) produces no interval.
  */
 export function buildIntervals(readings, fuel, gas) {
+  const hasNight = (r) => fuel === 'electricity' && typeof r.night === 'number';
   const sorted = readings
     .filter((r) => r.fuel === fuel)
     .sort((a, b) => ms(a.at) - ms(b.at));
@@ -35,48 +40,59 @@ export function buildIntervals(readings, fuel, gas) {
   for (let i = 1; i < sorted.length; i++) {
     const prev = sorted[i - 1];
     const cur = sorted[i];
-    if (cur.reset) continue;
+    if (cur.reset || hasNight(prev) !== hasNight(cur)) continue;
     const from = ms(prev.at);
     const to = ms(cur.at);
     if (to <= from) continue;
     const units = cur.value - prev.value;
+    const nightUnits = hasNight(cur) ? cur.night - prev.night : 0;
+    const dayKwh = toKwh(fuel, units, gas);
+    const nightKwh = nightUnits;
     intervals.push({
       fuel,
       from,
       to,
       units,
-      kwh: toKwh(fuel, units, gas),
+      nightUnits: hasNight(cur) ? nightUnits : undefined,
+      dayKwh,
+      nightKwh,
+      kwh: dayKwh + nightKwh,
       startReadingId: prev.id,
       endReadingId: cur.id,
-      invalid: units < 0,
+      invalid: units < 0 || nightUnits < 0,
     });
   }
   return intervals;
 }
 
-/** Flatten stored tariffs for one fuel into chronological rate segments. */
+/**
+ * Flatten stored tariffs for one fuel into chronological rate segments.
+ * `night` is the Economy 7 night unit rate, or null for single-rate tariffs.
+ */
 export function tariffSegments(tariffs, fuel) {
   const segs = [];
   for (const t of tariffs.filter((x) => x.fuel === fuel)) {
     const tFrom = ms(t.from);
     const tTo = t.to ? ms(t.to) : null;
     if (t.supplier === 'octopus' && t.rates) {
-      segs.push(...mergeRateSeries(t.rates.unit || [], t.rates.standing || [], tFrom, tTo));
+      segs.push(...mergeRateSeries(t.rates, tFrom, tTo));
     } else {
-      segs.push({ from: tFrom, to: tTo, unit: t.unitRate, standing: t.standingCharge });
+      segs.push({ from: tFrom, to: tTo, unit: t.unitRate, night: t.nightRate ?? null, standing: t.standingCharge });
     }
   }
   return segs.sort((a, b) => a.from - b.from);
 }
 
 /**
- * Combine separately-dated unit-rate and standing-charge series (Octopus style,
- * {from, to, value}) into segments where both are constant, clipped to [from, to).
+ * Combine separately-dated rate series (Octopus style, {from, to, value}) for
+ * `unit`, optional `night` and `standing` into segments where all are
+ * constant, clipped to [clipFrom, clipTo).
  */
-export function mergeRateSeries(unitSeries, standingSeries, clipFrom, clipTo) {
+export function mergeRateSeries({ unit = [], night = null, standing = [] }, clipFrom, clipTo) {
+  const all = [...unit, ...standing, ...(night || [])];
   const bounds = new Set([clipFrom]);
   if (clipTo !== null) bounds.add(clipTo);
-  for (const s of [...unitSeries, ...standingSeries]) {
+  for (const s of all) {
     const f = ms(s.from);
     const t = s.to ? ms(s.to) : null;
     if (f > clipFrom && (clipTo === null || f < clipTo)) bounds.add(f);
@@ -92,14 +108,15 @@ export function mergeRateSeries(unitSeries, standingSeries, clipFrom, clipTo) {
     const from = points[i];
     const to = i + 1 < points.length ? points[i + 1] : clipTo;
     if (to !== null && to <= from) continue;
-    const unit = valueAt(unitSeries, from);
-    const standing = valueAt(standingSeries, from);
-    if (unit === null && standing === null) continue;
+    const u = valueAt(unit, from);
+    const n = night ? valueAt(night, from) : null;
+    const st = valueAt(standing, from);
+    if (u === null && st === null) continue;
     const prev = segs[segs.length - 1];
-    if (prev && prev.to === from && prev.unit === unit && prev.standing === standing) {
+    if (prev && prev.to === from && prev.unit === u && prev.night === n && prev.standing === st) {
       prev.to = to;
     } else {
-      segs.push({ from, to, unit, standing });
+      segs.push({ from, to, unit: u, night: n, standing: st });
     }
   }
   return segs;
@@ -131,7 +148,9 @@ export function dayKey(t) {
  * Returns pence including VAT plus a per-day breakdown.
  */
 export function costInterval(interval, segments, vatRate = DEFAULT_VAT_RATE) {
-  const { from, to, kwh } = interval;
+  const { from, to } = interval;
+  const dayKwh = interval.dayKwh ?? interval.kwh;
+  const nightKwh = interval.nightKwh ?? 0;
   const duration = to - from;
   const cuts = new Set([from, to]);
   for (let m = nextLocalMidnight(from); m < to; m = nextLocalMidnight(m)) cuts.add(m);
@@ -144,16 +163,22 @@ export function costInterval(interval, segments, vatRate = DEFAULT_VAT_RATE) {
   let energyP = 0;
   let standingP = 0;
   let uncoveredMs = 0;
+  let noNightRate = false;
   const days = {};
   for (let i = 0; i < points.length - 1; i++) {
     const a = points[i];
     const b = points[i + 1];
-    const pieceKwh = (kwh * (b - a)) / duration;
+    const frac = (b - a) / duration;
+    const pieceDay = dayKwh * frac;
+    const pieceNight = nightKwh * frac;
+    const pieceKwh = pieceDay + pieceNight;
     const seg = segmentAt(segments, a);
     let e = 0;
     let s = 0;
     if (seg) {
-      e = pieceKwh * (seg.unit ?? 0);
+      // A night register on a single-rate tariff is charged at the unit rate.
+      if (pieceNight > 0 && seg.night == null) noNightRate = true;
+      e = pieceDay * (seg.unit ?? 0) + pieceNight * (seg.night ?? seg.unit ?? 0);
       s = ((b - a) / DAY) * (seg.standing ?? 0);
     } else {
       uncoveredMs += b - a;
@@ -161,8 +186,9 @@ export function costInterval(interval, segments, vatRate = DEFAULT_VAT_RATE) {
     energyP += e;
     standingP += s;
     const k = dayKey(a);
-    const d = (days[k] ||= { kwh: 0, costP: 0, ms: 0 });
+    const d = (days[k] ||= { kwh: 0, nightKwh: 0, costP: 0, ms: 0 });
     d.kwh += pieceKwh;
+    d.nightKwh += pieceNight;
     d.costP += (e + s) * (1 + vatRate);
     d.ms += b - a;
   }
@@ -174,6 +200,7 @@ export function costInterval(interval, segments, vatRate = DEFAULT_VAT_RATE) {
     totalP: netP * (1 + vatRate),
     days,
     missingTariff: uncoveredMs > 0,
+    noNightRate,
   };
 }
 
@@ -205,8 +232,9 @@ export function analyseFuel({ readings, tariffs, fuel, gas, vatRate = DEFAULT_VA
   const daily = {};
   for (const iv of intervals) {
     for (const [k, d] of Object.entries(iv.cost.days)) {
-      const acc = (daily[k] ||= { kwh: 0, costP: 0, ms: 0 });
+      const acc = (daily[k] ||= { kwh: 0, nightKwh: 0, costP: 0, ms: 0 });
       acc.kwh += d.kwh;
+      acc.nightKwh += d.nightKwh;
       acc.costP += d.costP;
       acc.ms += d.ms;
     }

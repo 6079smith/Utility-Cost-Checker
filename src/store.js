@@ -13,6 +13,8 @@ const defaults = () => ({
     vatRate: 0.05,
     paymentMethod: 'DIRECT_DEBIT',
     gas: { units: 'm3', calorificValue: 39.5 },
+    // meter: 'single' or 'e7' (Economy 7: day + night registers).
+    electricity: { meter: 'single', rate1Is: 'night' },
     ai: { mode: 'helper', helperUrl: '', accessCode: '', apiKey: '' },
   },
   tariffs: [],
@@ -35,6 +37,7 @@ function load() {
         ...d.settings,
         ...parsed.settings,
         gas: { ...d.settings.gas, ...parsed.settings?.gas },
+        electricity: { ...d.settings.electricity, ...parsed.settings?.electricity },
         ai: { ...d.settings.ai, ...parsed.settings?.ai },
       },
     };
@@ -74,6 +77,8 @@ export function lastReading(fuel, before = Infinity) {
 export function tariffsFor(fuel) {
   return state.tariffs.filter((t) => t.fuel === fuel).sort((a, b) => Date.parse(a.from) - Date.parse(b.from));
 }
+
+export const isEconomy7 = () => state.settings.electricity.meter === 'e7';
 
 export function currentTariff(fuel) {
   return tariffsFor(fuel).find((t) => !t.to) || null;

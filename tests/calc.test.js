@@ -99,7 +99,7 @@ test('octopus rate series merge into constant segments', () => {
     { from: '2026-04-01T00:00:00Z', to: null, value: 22 },
   ];
   const standing = [{ from: '2025-10-01T00:00:00Z', to: null, value: 51 }];
-  const segs = mergeRateSeries(unit, standing, Date.parse('2026-02-01T00:00:00Z'), null);
+  const segs = mergeRateSeries({ unit, standing }, Date.parse('2026-02-01T00:00:00Z'), null);
   assert.equal(segs.length, 2);
   assert.equal(segs[0].from, Date.parse('2026-02-01T00:00:00Z'));
   assert.equal(segs[0].unit, 24);
@@ -124,7 +124,7 @@ test('octopus tariff flattens via tariffSegments', () => {
     ],
     'electricity',
   );
-  assert.deepEqual(segs, [{ from: Date.parse('2026-01-01T00:00:00Z'), to: null, unit: 25, standing: 50 }]);
+  assert.deepEqual(segs, [{ from: Date.parse('2026-01-01T00:00:00Z'), to: null, unit: 25, night: null, standing: 50 }]);
 });
 
 test('BST day boundaries follow UK local midnight', () => {
@@ -155,4 +155,82 @@ test('analyseFuel, sumDays, averages and projections', () => {
   const avg = recentDailyAverage(a.intervals, 30);
   near(avg.costP, 240);
   near(avg.basedOnDays, 7);
+});
+
+test('economy 7: day and night registers charged at their own rates', () => {
+  const readings = [
+    { id: '1', fuel: 'electricity', at: '2026-01-01T00:00:00Z', value: 1000, night: 500 },
+    { id: '2', fuel: 'electricity', at: '2026-01-03T00:00:00Z', value: 1010, night: 530 },
+  ];
+  const tariffs = [
+    { fuel: 'electricity', supplier: 'manual', from: '2025-01-01T00:00:00Z', to: null, unitRate: 30, nightRate: 12, standingCharge: 50 },
+  ];
+  const a = analyseFuel({ readings, tariffs, fuel: 'electricity', vatRate: 0 });
+  const iv = a.intervals[0];
+  assert.equal(iv.dayKwh, 10);
+  assert.equal(iv.nightKwh, 30);
+  assert.equal(iv.kwh, 40);
+  near(iv.cost.energyP, 10 * 30 + 30 * 12);
+  near(iv.cost.standingP, 100);
+  assert.equal(iv.cost.noNightRate, false);
+  near(a.daily['2026-01-01'].nightKwh, 15);
+});
+
+test('economy 7 with Octopus day/night series', () => {
+  const segs = tariffSegments(
+    [
+      {
+        fuel: 'electricity',
+        supplier: 'octopus',
+        from: '2026-01-01T00:00:00Z',
+        to: null,
+        rates: {
+          unit: [{ from: '2025-12-01T00:00:00Z', to: null, value: 28 }],
+          night: [
+            { from: '2025-12-01T00:00:00Z', to: '2026-01-02T00:00:00Z', value: 14 },
+            { from: '2026-01-02T00:00:00Z', to: null, value: 13 },
+          ],
+          standing: [{ from: '2025-12-01T00:00:00Z', to: null, value: 50 }],
+        },
+      },
+    ],
+    'electricity',
+  );
+  assert.deepEqual(segs.map((s) => [s.unit, s.night]), [[28, 14], [28, 13]]);
+  const c = costInterval(
+    { from: Date.parse('2026-01-01T00:00:00Z'), to: Date.parse('2026-01-03T00:00:00Z'), dayKwh: 20, nightKwh: 40 },
+    segs,
+    0,
+  );
+  near(c.energyP, 20 * 28 + 20 * 14 + 20 * 13);
+});
+
+test('economy 7 readings on a single-rate tariff fall back to the unit rate and flag it', () => {
+  const segs = [{ from: 0, to: null, unit: 20, night: null, standing: 0 }];
+  const c = costInterval({ from: 0, to: 86400e3, dayKwh: 5, nightKwh: 5 }, segs, 0);
+  near(c.energyP, 200);
+  assert.equal(c.noNightRate, true);
+});
+
+test('switching between single-rate and economy 7 readings starts a new series', () => {
+  const ivs = buildIntervals(
+    [
+      { id: 'a', fuel: 'electricity', at: '2026-01-01T00:00:00Z', value: 100 },
+      { id: 'b', fuel: 'electricity', at: '2026-01-02T00:00:00Z', value: 5, night: 7 },
+      { id: 'c', fuel: 'electricity', at: '2026-01-03T00:00:00Z', value: 8, night: 17 },
+    ],
+    'electricity',
+  );
+  assert.deepEqual(ivs.map((i) => [i.startReadingId, i.dayKwh, i.nightKwh]), [['b', 3, 10]]);
+});
+
+test('economy 7 night register going backwards is invalid', () => {
+  const ivs = buildIntervals(
+    [
+      { id: 'a', fuel: 'electricity', at: '2026-01-01T00:00:00Z', value: 100, night: 50 },
+      { id: 'b', fuel: 'electricity', at: '2026-01-02T00:00:00Z', value: 110, night: 40 },
+    ],
+    'electricity',
+  );
+  assert.equal(ivs[0].invalid, true);
 });

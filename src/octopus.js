@@ -46,7 +46,7 @@ class HttpError extends Error {
 
 function friendly(err) {
   if (err instanceof HttpError && err.status === 404) {
-    return new Error('Octopus doesn’t recognise that tariff for your region. Check the product code.');
+    return new Error('Octopus doesn’t offer that tariff for your region and meter type. Check the product code and meter type.');
   }
   if (err instanceof HttpError) return err;
   return new Error('Couldn’t reach Octopus. Check your connection and try again.');
@@ -81,8 +81,10 @@ export async function listProducts(proxyUrl) {
     .sort((a, b) => a.name.localeCompare(b.name));
 }
 
-export function tariffCode(fuel, productCode, region) {
-  return `${fuel === 'gas' ? 'G' : 'E'}-1R-${productCode}-${region}`;
+/** e.g. E-1R-VAR-22-11-01-C (single rate) or E-2R-VAR-22-11-01-C (Economy 7). */
+export function tariffCode(fuel, productCode, region, registers = 1) {
+  if (fuel === 'gas') return `G-1R-${productCode}-${region}`;
+  return `E-${registers === 2 ? '2R' : '1R'}-${productCode}-${region}`;
 }
 
 function toSeries(results, paymentMethod) {
@@ -97,15 +99,25 @@ function toSeries(results, paymentMethod) {
 /**
  * Fetch unit rates (p/kWh) and standing charges (p/day), exc. VAT, from
  * `sinceIso` onwards. Returned as {from, to, value} series ready for calc.js.
+ * With registers = 2 (Economy 7) `unit` is the day rate and `night` the night rate.
  */
-export async function fetchRates({ fuel, productCode, region, sinceIso, paymentMethod = 'DIRECT_DEBIT', proxyUrl }) {
-  const code = tariffCode(fuel, productCode, region);
+export async function fetchRates({ fuel, productCode, region, registers = 1, sinceIso, paymentMethod = 'DIRECT_DEBIT', proxyUrl }) {
+  const e7 = fuel === 'electricity' && registers === 2;
+  const code = tariffCode(fuel, productCode, region, e7 ? 2 : 1);
   const base = `/v1/products/${encodeURIComponent(productCode)}/${fuel}-tariffs/${code}`;
   const q = `?period_from=${encodeURIComponent(sinceIso)}&page_size=1500`;
-  const [unit, standing] = await Promise.all([
-    getAllPages(`${base}/standard-unit-rates/${q}`, proxyUrl),
+  const [unit, night, standing] = await Promise.all([
+    getAllPages(`${base}/${e7 ? 'day-unit-rates' : 'standard-unit-rates'}/${q}`, proxyUrl),
+    e7 ? getAllPages(`${base}/night-unit-rates/${q}`, proxyUrl) : Promise.resolve(null),
     getAllPages(`${base}/standing-charges/${q}`, proxyUrl),
   ]);
-  if (!unit.length) throw new Error(`No ${fuel} prices published for ${code}.`);
-  return { tariffCode: code, unit: toSeries(unit, paymentMethod), standing: toSeries(standing, paymentMethod) };
+  if (!unit.length || (e7 && !night.length)) {
+    throw new Error(`No ${e7 ? 'Economy 7 ' : ''}${fuel} prices published for ${code}.`);
+  }
+  return {
+    tariffCode: code,
+    unit: toSeries(unit, paymentMethod),
+    night: e7 ? toSeries(night, paymentMethod) : null,
+    standing: toSeries(standing, paymentMethod),
+  };
 }
