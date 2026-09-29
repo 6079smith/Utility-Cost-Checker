@@ -10,7 +10,7 @@
 //   ALLOWED_ORIGIN     your GitHub Pages origin, e.g. https://you.github.io
 
 import Anthropic from '@anthropic-ai/sdk';
-import { meterRequest, parseMeterResponse } from '../../src/meterPrompt.js';
+import { meterRequest, parseMeterResponse, createMeterMessage, friendlyApiError, apiErrorText } from '../../src/meterPrompt.js';
 
 const MAX_IMAGE_BASE64 = 7_000_000; // ~5 MB decoded
 
@@ -59,7 +59,8 @@ export default {
 
       const client = new Anthropic({ apiKey: env.ANTHROPIC_API_KEY });
       try {
-        const response = await client.beta.messages.create(
+        const response = await createMeterMessage(
+          client,
           meterRequest({
             imageBase64,
             mediaType,
@@ -71,9 +72,12 @@ export default {
         );
         return json(parseMeterResponse(response));
       } catch (err) {
-        if (err instanceof Anthropic.RateLimitError) return json({ error: 'Busy right now. Try again in a minute.' }, 429);
-        if (err instanceof Anthropic.AuthenticationError) return json({ error: 'The helper’s API key is invalid.' }, 502);
-        if (err instanceof Anthropic.APIError) return json({ error: `Claude API error ${err.status ?? ''}` }, 502);
+        if (err instanceof Anthropic.APIError) {
+          // Visible with `npx wrangler tail`.
+          console.error('Anthropic API error', err.status, apiErrorText(err));
+          return json({ error: friendlyApiError(err) }, err.status === 429 ? 429 : 502);
+        }
+        console.error('read-meter failed', err);
         return json({ error: err.message || 'Couldn’t read the meter.' }, 500);
       }
     }

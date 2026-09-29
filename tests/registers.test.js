@@ -61,3 +61,24 @@ test('detects swapped day/night against the previous reading', () => {
   assert.equal(looksSwapped(1004, 5010, prev), false);
   assert.equal(looksSwapped(5010, 1004, { value: 1000 }), false);
 });
+
+import { createMeterMessage, friendlyApiError } from '../src/meterPrompt.js';
+
+test('meter request retries without the fallback beta when it is rejected', async () => {
+  const calls = [];
+  const err = Object.assign(new Error('400'), { status: 400, error: { error: { message: 'fallbacks: unknown field' } } });
+  const client = {
+    beta: { messages: { create: async (p) => (calls.push(['beta', p]), Promise.reject(err)) } },
+    messages: { create: async (p) => (calls.push(['plain', p]), { ok: true }) },
+  };
+  const res = await createMeterMessage(client, { model: 'm', betas: ['x'], fallbacks: 'default', max_tokens: 1 });
+  assert.deepEqual(res, { ok: true });
+  assert.deepEqual(calls[1], ['plain', { model: 'm', max_tokens: 1 }]);
+});
+
+test('other 400s are not retried and get a readable message', async () => {
+  const err = Object.assign(new Error('400'), { status: 400, error: { error: { message: 'Your credit balance is too low to access the Anthropic API.' } } });
+  const client = { beta: { messages: { create: async () => Promise.reject(err) } }, messages: { create: async () => assert.fail('no retry') } };
+  await assert.rejects(createMeterMessage(client, {}), (e) => e === err);
+  assert.match(friendlyApiError(err), /no credit/);
+});

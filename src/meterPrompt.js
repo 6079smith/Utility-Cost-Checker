@@ -79,3 +79,37 @@ export function parseMeterResponse(response) {
   if (!text) throw new Error('No reading returned. Please enter it manually.');
   return JSON.parse(text);
 }
+
+/**
+ * Send the meter request. The refusal fallback is an optional beta; if the
+ * account rejects it, retry once as a plain request.
+ */
+export async function createMeterMessage(client, params) {
+  try {
+    return await client.beta.messages.create(params);
+  } catch (err) {
+    if (err?.status === 400 && /fallback|beta/i.test(apiErrorText(err))) {
+      const { betas, fallbacks, ...plain } = params;
+      return client.messages.create(plain);
+    }
+    throw err;
+  }
+}
+
+/** Anthropic's own error text from an SDK error, e.g. "Your credit balance is too low…". */
+export function apiErrorText(err) {
+  return err?.error?.error?.message || err?.message || String(err);
+}
+
+/** A message the person holding the phone can act on. */
+export function friendlyApiError(err) {
+  const text = apiErrorText(err);
+  if (/credit balance/i.test(text)) {
+    return 'Your Anthropic API account has no credit. Top up at console.anthropic.com → Billing. (A Claude.ai subscription doesn’t include API credit.)';
+  }
+  if (err?.status === 401) return 'The Claude API key is invalid.';
+  if (err?.status === 403) return `The Claude API key isn’t allowed to do this: ${text}`;
+  if (err?.status === 404 || /model/i.test(text)) return `Claude model not available on this account: ${text}`;
+  if (err?.status === 429) return 'Busy right now. Try again in a minute.';
+  return `Claude API error ${err?.status ?? ''}: ${text}`;
+}

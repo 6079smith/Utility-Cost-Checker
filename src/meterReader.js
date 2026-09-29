@@ -1,7 +1,7 @@
 // Reads a meter photo with Claude, via the helper Worker (recommended: the key
 // stays on the server) or directly with the user's own API key.
 
-import { meterRequest, parseMeterResponse } from './meterPrompt.js';
+import { meterRequest, parseMeterResponse, createMeterMessage, friendlyApiError } from './meterPrompt.js';
 
 const MAX_EDGE = 1568;
 
@@ -37,14 +37,13 @@ export async function readMeter({ image, fuel, economy7 = false, previous, ai })
     const { default: Anthropic } = await import('@anthropic-ai/sdk');
     const client = new Anthropic({ apiKey: ai.apiKey, dangerouslyAllowBrowser: true });
     try {
-      const response = await client.beta.messages.create(
+      const response = await createMeterMessage(
+        client,
         meterRequest({ imageBase64: image.base64, mediaType: image.mediaType, fuel, economy7, previous }),
       );
       return parseMeterResponse(response);
     } catch (err) {
-      if (err instanceof Anthropic.AuthenticationError) throw new Error('Your Claude API key was rejected. Check it in Settings.');
-      if (err instanceof Anthropic.RateLimitError) throw new Error('Too many requests. Wait a minute and try again.');
-      if (err instanceof Anthropic.APIError) throw new Error(`Claude API error ${err.status ?? ''}: ${err.message}`);
+      if (err instanceof Anthropic.APIError) throw new Error(friendlyApiError(err));
       throw err;
     }
   }
