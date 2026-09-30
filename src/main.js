@@ -230,37 +230,39 @@ function renderHome() {
   const weekP = week.reduce((t, x) => t + x.costP, 0);
   const monthP = month.reduce((t, x) => t + x.costP, 0);
 
-  if (anyIntervals) {
+  if (hasReadings) {
+    // Always show the gauge once there are readings; it fills in as data arrives.
     const perDay = avgs.reduce((t, x) => t + (x?.costP || 0), 0);
+    const hasTypical = avgs.some(Boolean);
     const pending = FUELS.filter((f, i) => a[f].intervals.length && !avgs[i]);
-    html += '<div class="card">';
-    if (avgs.some(Boolean)) {
-      const g = latestDay(a);
-      html += `<div class="gauge">
-          <div class="gauge-ring">${ringSvg(FUELS.map((f) => ({ frac: (g.byFuel[f] || 0) / perDay, color: `var(--${fuelVar(f)})` })))}
-            <div class="gauge-mid"><div class="v">${gbp(g.totalP)}</div><div class="s">${esc(g.label)}<br>of ${gbp(perDay)} typical</div></div>
-          </div>
-          <div class="gauge-side">
-            <div class="caps">Typical month</div>
-            <div class="v">${gbp(perDay * 30.44)}</div>
-            <div class="key">${FUELS.map((f, i) => (avgs[i] ? `<span><i class="swatch ${f}"></i>${fuelName(f)} ${gbp(avgs[i].costP)}/day</span>` : '')).join('')}</div>
-          </div>
-        </div>`;
-      if (pending.length) html += `<p class="tiny" style="margin-top:8px">${pending.map(fuelName).join(' and ')} not included yet (readings too close together).</p>`;
-      html += `<div class="tiles">
-          <div class="tile"><div class="label">Week</div><div class="value">${gbp(weekP)}</div><div class="sub">so far</div></div>
-          <div class="tile"><div class="label">Month</div><div class="value">${gbp(monthP)}</div><div class="sub">so far</div></div>
-          <div class="tile"><div class="label">Per week</div><div class="value">${gbp(perDay * 7)}</div><div class="sub">typical</div></div>
-        </div>`;
-    } else {
-      html += `<h3>Typical monthly cost</h3>
-        <p class="muted small">Needs readings at least ${MIN_RATE_HOURS} hours apart. A day or more apart gives the best estimate.</p>
-        <div class="tiles two">
-          <div class="tile"><div class="label">Week</div><div class="value">${gbp(weekP)}</div><div class="sub">so far</div></div>
-          <div class="tile"><div class="label">Month</div><div class="value">${gbp(monthP)}</div><div class="sub">so far</div></div>
-        </div>`;
-    }
-    html += `<p class="tiny" style="margin-top:8px">“So far” counts up to your latest reading. Includes standing charges and 5% VAT.</p></div>`;
+    const g = anyIntervals ? latestDay(a) : null;
+    const parts = hasTypical && g ? FUELS.map((f) => ({ frac: (g.byFuel[f] || 0) / perDay, color: `var(--${fuelVar(f)})` })) : [];
+    const mid = g
+      ? `<div class="v">${gbp(g.totalP)}</div><div class="s">${esc(g.label)}${hasTypical ? `<br>of ${gbp(perDay)} typical` : ''}</div>`
+      : '<div class="v">—</div><div class="s">no usage yet</div>';
+    html += `<div class="card"><div class="gauge">
+        <div class="gauge-ring">${ringSvg(parts)}<div class="gauge-mid">${mid}</div></div>
+        <div class="gauge-side">
+          <div class="caps">Typical month</div>
+          <div class="v">${hasTypical ? gbp(perDay * 30.44) : '—'}</div>
+          ${
+            hasTypical
+              ? `<div class="key">${FUELS.map((f, i) => (avgs[i] ? `<span><i class="swatch ${f}"></i>${fuelName(f)} ${gbp(avgs[i].costP)}/day</span>` : '')).join('')}</div>`
+              : `<div class="tiny">${
+                  anyIntervals
+                    ? `Shows once your readings are at least ${MIN_RATE_HOURS} hours apart. A day or more is best.`
+                    : 'Take a second reading of each meter, ideally a day later, to start.'
+                }</div>`
+          }
+        </div>
+      </div>`;
+    if (hasTypical && pending.length) html += `<p class="tiny" style="margin-top:8px">${pending.map(fuelName).join(' and ')} not included yet (readings too close together).</p>`;
+    html += `<div class="tiles">
+        <div class="tile"><div class="label">Week</div><div class="value">${gbp(weekP)}</div><div class="sub">so far</div></div>
+        <div class="tile"><div class="label">Month</div><div class="value">${gbp(monthP)}</div><div class="sub">so far</div></div>
+        <div class="tile"><div class="label">Per week</div><div class="value">${hasTypical ? gbp(perDay * 7) : '—'}</div><div class="sub">typical</div></div>
+      </div>
+      <p class="tiny" style="margin-top:8px">“So far” counts up to your latest reading. Includes standing charges and 5% VAT.</p></div>`;
   }
 
   for (const fuel of FUELS) {
