@@ -370,13 +370,15 @@ function renderAdd() {
   const s = getState();
   let fuel = FUELS.includes(params.get('fuel')) ? params.get('fuel') : 'electricity';
   const canAi = aiAvailable(s.settings.ai);
+  // Photo reading switched off in Settings: no camera, just type the numbers.
+  const photoOff = s.settings.ai.mode === 'off';
   const e7 = () => fuel === 'electricity' && isEconomy7();
 
   view.innerHTML = `
     <div class="segmented" role="group" aria-label="Meter">
       ${FUELS.map((f) => `<button type="button" data-fuel="${f}" aria-pressed="${f === fuel}">${fuelName(f)}</button>`).join('')}
     </div>
-    <div class="card">
+    ${photoOff ? '' : `<div class="card">
       <div class="viewfinder">
         <img id="preview" alt="Meter photo" hidden />
         <div class="hint" id="vf-hint">Point the camera at the numbers on your meter</div>
@@ -386,7 +388,7 @@ function renderAdd() {
       <input id="photo" type="file" accept="image/*" capture="environment" hidden />
       <p id="e7-photo-tip" class="tiny" style="margin-top:10px;text-align:center" hidden>Digital meter showing one rate at a time? Press its button to show the other rate and take a second photo. Each photo fills in whichever rate it shows.</p>
       ${canAi ? '' : '<p class="tiny" style="margin-top:10px;text-align:center">Photo reading isn’t set up on this phone, so type the numbers in below. You can set it up in Settings.</p>'}
-    </div>
+    </div>`}
     <form id="reading-form" class="card" novalidate>
       <div id="single-fields">
         <label class="caps" for="value">Meter reading (<span class="unit"></span>)</label>
@@ -439,7 +441,7 @@ function renderAdd() {
     view.querySelectorAll('.unit').forEach((u) => (u.textContent = meterUnit(fuel)));
     $('#single-fields').hidden = e7();
     $('#e7-fields').hidden = !e7();
-    $('#e7-photo-tip').hidden = !e7();
+    if ($('#e7-photo-tip')) $('#e7-photo-tip').hidden = !e7();
     const at = Date.parse(atEl.value);
     const prev = lastReading(fuel, Number.isFinite(at) ? at : Infinity);
     const prevEl = $('#prev');
@@ -496,7 +498,7 @@ function renderAdd() {
   for (const el of [$('#value'), $('#day'), $('#night')]) el.addEventListener('input', () => ((source = 'manual'), refresh()));
   [atEl, resetEl].forEach((el) => el.addEventListener('input', refresh));
 
-  $('#photo').addEventListener('change', async (e) => {
+  $('#photo')?.addEventListener('change', async (e) => {
     const file = e.target.files?.[0];
     e.target.value = '';
     if (!file) return;
