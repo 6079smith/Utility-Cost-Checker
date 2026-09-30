@@ -26,7 +26,7 @@ import {
   MIN_RATE_HOURS,
 } from './calc.js';
 import { REGIONS, regionForPostcode, listProducts, fetchRates } from './octopus.js';
-import { prepareImage, readMeter, aiAvailable } from './meterReader.js';
+import { prepareImage, readMeter, readBill, aiAvailable } from './meterReader.js';
 import { renderDailyChart, ringSvg, sparkSvg } from './chart.js';
 import { classifyLabel, mapRegisters, looksSwapped } from './registers.js';
 import { SINCE_START, planAdd, planEdit } from './tariffPlan.js';
@@ -1133,6 +1133,14 @@ function openTariffForm(fuel) {
         <input id="code-${fuel}" autocapitalize="characters" autocomplete="off" />
       </div>
       <div data-part="manual" hidden>
+        ${
+          aiAvailable(s.settings.ai)
+            ? `<label class="btn secondary" for="bill-${fuel}" style="margin-top:14px">Read prices from a bill</label>
+               <input id="bill-${fuel}" type="file" accept="image/*,application/pdf" hidden />
+               <p class="tiny" style="margin-top:6px;text-align:center">Photo or PDF of a bill or annual statement. You can check everything before saving.</p>
+               <div class="small" data-bill-status style="margin-top:6px"></div>`
+            : ''
+        }
         <label for="label-${fuel}">Supplier / tariff name</label>
         <input id="label-${fuel}" placeholder="e.g. British Gas Standard Variable" />
         ${
@@ -1172,6 +1180,49 @@ function openTariffForm(fuel) {
   holder.querySelectorAll('[data-sup]').forEach((b) => b.addEventListener('click', () => setSup(b.dataset.sup)));
   setSup(supplier);
   holder.querySelector('[data-cancel]').addEventListener('click', () => (holder.innerHTML = ''));
+
+  // Fill the form from a bill photo/PDF.
+  holder.querySelector(`#bill-${fuel}`)?.addEventListener('change', async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    const status = holder.querySelector('[data-bill-status]');
+    status.innerHTML = '<span class="spinner"></span> Reading the bill…';
+    try {
+      const bill = await readBill({ file, ai: getState().settings.ai });
+      const f = bill[fuel] || {};
+      if (!f.found) {
+        status.innerHTML = `<div class="notice">No ${fuel} prices found on that bill. ${esc(bill.notes)}</div>`;
+        return;
+      }
+      const set = (id, v) => {
+        const el = holder.querySelector(id);
+        if (el && v != null && Number.isFinite(v)) el.value = String(Math.round(v * 1000) / 1000);
+      };
+      set(`#unit-${fuel}`, f.unit_rate_p);
+      set(`#stand-${fuel}`, f.standing_charge_p);
+      if (e7) set(`#nightrate-${fuel}`, f.night_rate_p);
+      holder.querySelector(`#label-${fuel}`).value = [bill.supplier, bill.tariff_name].filter(Boolean).join(' ').trim();
+      holder.querySelector(`#incvat-${fuel}`).checked = !!bill.prices_include_vat;
+      const iso = /^\d{4}-\d{2}-\d{2}$/;
+      const today = dayKey(Date.now());
+      if (iso.test(bill.tariff_start || '')) holder.querySelector(`#from-${fuel}`).value = bill.tariff_start;
+      // A fixed deal's end date in the future means you're still on it.
+      const endsLater = iso.test(bill.tariff_end || '') && bill.tariff_end > today;
+      if (iso.test(bill.tariff_end || '') && !endsLater) holder.querySelector(`#to-${fuel}`).value = bill.tariff_end;
+      const notes = [];
+      if (!e7 && f.night_rate_p != null) notes.push('The bill shows a night rate, but your meter is set to single rate. Change it under Electricity meter if you’re on Economy 7.');
+      if (e7 && f.night_rate_p == null) notes.push('No night rate was found. Please add it.');
+      if (!iso.test(bill.tariff_start || '')) notes.push('No tariff start date was shown, so check the Start date.');
+      if (endsLater) notes.push(`Fixed until ${fmtDate(bill.tariff_end + 'T12:00:00', { day: 'numeric', month: 'short', year: 'numeric' })}: End left blank as you’re still on it.`);
+      if (bill.notes) notes.push(esc(bill.notes));
+      status.innerHTML = `<span class="badge ${esc(bill.confidence)}">${esc(bill.confidence)} confidence</span>
+        Filled in from the bill${bill.bill_period_start && bill.bill_period_end ? ` (bill for ${esc(bill.bill_period_start)} to ${esc(bill.bill_period_end)})` : ''}. Check the figures before saving.
+        ${notes.map((n) => `<div class="tiny" style="margin-top:4px">${n}</div>`).join('')}`;
+    } catch (err) {
+      status.innerHTML = `<span class="error">${esc(err.message)}</span>`;
+    }
+  });
 
   const select = holder.querySelector(`#product-${fuel}`);
   const codeEl = holder.querySelector(`#code-${fuel}`);

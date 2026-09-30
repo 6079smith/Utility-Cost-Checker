@@ -1,6 +1,7 @@
 // Cloudflare Worker that keeps your Claude API key off family phones.
 //
 //   POST /read-meter       photo → { registers: [{label, digits, value}], meter_kind, unit, confidence, notes }
+//   POST /read-bill        bill photo or PDF → tariff prices and dates (see BILL_SCHEMA)
 //   GET  /octopus/v1/...   read-only pass-through to api.octopus.energy (CORS fallback)
 //
 // Secrets (set with `npx wrangler secret put NAME`):
@@ -10,7 +11,15 @@
 //   ALLOWED_ORIGIN     your GitHub Pages origin, e.g. https://you.github.io
 
 import Anthropic from '@anthropic-ai/sdk';
-import { meterRequest, parseMeterResponse, createMeterMessage, friendlyApiError, apiErrorText } from '../../src/meterPrompt.js';
+import {
+  meterRequest,
+  billRequest,
+  BILL_MEDIA_TYPES,
+  parseMeterResponse,
+  createMeterMessage,
+  friendlyApiError,
+  apiErrorText,
+} from '../../src/meterPrompt.js';
 
 const MAX_IMAGE_BASE64 = 7_000_000; // ~5 MB decoded
 
@@ -37,6 +46,34 @@ export default {
         status: res.status,
         headers: { ...cors, 'content-type': res.headers.get('content-type') || 'application/json' },
       });
+    }
+
+    if (request.method === 'POST' && url.pathname === '/read-bill') {
+      if (env.ACCESS_CODE && request.headers.get('x-access-code') !== env.ACCESS_CODE) {
+        return json({ error: 'Wrong access code. Check Settings → Photo reading.' }, 401);
+      }
+      let body;
+      try {
+        body = await request.json();
+      } catch {
+        return json({ error: 'Invalid request.' }, 400);
+      }
+      const { fileBase64, mediaType } = body;
+      if (typeof fileBase64 !== 'string' || !fileBase64 || fileBase64.length > MAX_IMAGE_BASE64) {
+        return json({ error: 'Bill missing or too large (5 MB max).' }, 400);
+      }
+      if (!BILL_MEDIA_TYPES.includes(mediaType)) return json({ error: 'Use a photo or a PDF.' }, 400);
+      const client = new Anthropic({ apiKey: env.ANTHROPIC_API_KEY });
+      try {
+        return json(parseMeterResponse(await createMeterMessage(client, billRequest({ fileBase64, mediaType }))));
+      } catch (err) {
+        if (err instanceof Anthropic.APIError) {
+          console.error('Anthropic API error', err.status, apiErrorText(err));
+          return json({ error: friendlyApiError(err) }, err.status === 429 ? 429 : 502);
+        }
+        console.error('read-bill failed', err);
+        return json({ error: err.message || 'Couldn’t read the bill.' }, 500);
+      }
     }
 
     if (request.method === 'POST' && url.pathname === '/read-meter') {

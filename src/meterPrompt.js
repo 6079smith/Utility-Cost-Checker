@@ -73,10 +73,10 @@ export function meterRequest({ imageBase64, mediaType, fuel, economy7 = false, p
 /** Pull the structured result out of a Messages API response. */
 export function parseMeterResponse(response) {
   if (response.stop_reason === 'refusal') {
-    throw new Error('The photo couldn’t be read. Please enter the reading manually.');
+    throw new Error('The photo couldn’t be read. Please enter it manually.');
   }
   const text = response.content.find((b) => b.type === 'text')?.text;
-  if (!text) throw new Error('No reading returned. Please enter it manually.');
+  if (!text) throw new Error('Nothing was read. Please enter it manually.');
   return JSON.parse(text);
 }
 
@@ -112,4 +112,78 @@ export function friendlyApiError(err) {
   if (err?.status === 404 || /model/i.test(text)) return `Claude model not available on this account: ${text}`;
   if (err?.status === 429) return 'Busy right now. Try again in a minute.';
   return `Claude API error ${err?.status ?? ''}: ${text}`;
+}
+
+// ---------- Reading prices from a bill ----------
+
+export const BILL_SYSTEM = `You read UK domestic energy bills and annual statements and pull out the tariff prices.
+
+- Report prices in pence: unit rates in p/kWh and standing charges in p/day. Convert £ to pence (e.g. £0.2450/kWh → 24.5).
+- Economy 7 / two-rate electricity: put the day (peak/normal) rate in unit_rate_p and the night (off-peak/low) rate in night_rate_p. Otherwise night_rate_p is null.
+- If a fuel isn't on the bill, set found to false and its prices to null.
+- If prices changed during the bill period, report the most recent prices and say so in "notes".
+- prices_include_vat: true if the rates as printed already include VAT, false if VAT (5%) is added separately.
+- Dates as YYYY-MM-DD. tariff_start / tariff_end are the contract or tariff dates (e.g. "Fixed until", "Tariff end date"); null if not shown. bill_period_start / bill_period_end are the dates the bill covers.
+- supplier is the company (e.g. "British Gas"); tariff_name is the tariff as printed (e.g. "Fixed Price Nov 2026").
+- If the image is not an energy bill or is unreadable, set found to false for both fuels and explain in "notes".`;
+
+const price = { type: ['number', 'null'] };
+const isoDate = { type: ['string', 'null'], description: 'YYYY-MM-DD or null' };
+
+export const BILL_SCHEMA = {
+  type: 'object',
+  properties: {
+    supplier: { type: 'string' },
+    tariff_name: { type: 'string' },
+    electricity: {
+      type: 'object',
+      properties: { found: { type: 'boolean' }, unit_rate_p: price, night_rate_p: price, standing_charge_p: price },
+      required: ['found', 'unit_rate_p', 'night_rate_p', 'standing_charge_p'],
+      additionalProperties: false,
+    },
+    gas: {
+      type: 'object',
+      properties: { found: { type: 'boolean' }, unit_rate_p: price, standing_charge_p: price },
+      required: ['found', 'unit_rate_p', 'standing_charge_p'],
+      additionalProperties: false,
+    },
+    prices_include_vat: { type: 'boolean' },
+    tariff_start: isoDate,
+    tariff_end: isoDate,
+    bill_period_start: isoDate,
+    bill_period_end: isoDate,
+    confidence: { type: 'string', enum: ['high', 'medium', 'low'] },
+    notes: { type: 'string' },
+  },
+  required: [
+    'supplier',
+    'tariff_name',
+    'electricity',
+    'gas',
+    'prices_include_vat',
+    'tariff_start',
+    'tariff_end',
+    'bill_period_start',
+    'bill_period_end',
+    'confidence',
+    'notes',
+  ],
+  additionalProperties: false,
+};
+
+export const BILL_MEDIA_TYPES = ['image/jpeg', 'image/png', 'image/webp', 'application/pdf'];
+
+/** Messages API params for a bill photo or PDF. */
+export function billRequest({ fileBase64, mediaType }) {
+  const source = { type: 'base64', media_type: mediaType, data: fileBase64 };
+  const file = mediaType === 'application/pdf' ? { type: 'document', source } : { type: 'image', source };
+  return {
+    model: METER_MODEL,
+    max_tokens: 16000,
+    betas: ['server-side-fallback-2026-07-01'],
+    fallbacks: 'default',
+    output_config: { effort: 'medium', format: { type: 'json_schema', schema: BILL_SCHEMA } },
+    system: BILL_SYSTEM,
+    messages: [{ role: 'user', content: [file, { type: 'text', text: 'Read the tariff prices from this bill.' }] }],
+  };
 }
