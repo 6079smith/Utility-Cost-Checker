@@ -7,7 +7,7 @@ An iPhone-friendly web app for households in England, Scotland and Wales. Photog
 - **Octopus prices fetched automatically.** It uses Octopus's public API and picks up price changes, such as each quarterly price-cap change.
 - **Economy 7.** Day and night registers are read and charged at their own rates. That works with Octopus (fetched automatically) and with rates typed from any other supplier's bill.
 - **Any other supplier.** Type the unit rate and standing charge from your bill. When you switch supplier, earlier readings keep the old prices.
-- **Meter-style display.** Dark by default, with readings shown in digit boxes like the meter itself, a gauge of today's spend against a typical day, and 14-day trend lines. Switch to Light or Match iPhone in Settings → Appearance.
+- **Meter-style display.** Dark by default, with readings shown in digit boxes like the meter itself, a gauge of today's spend against a typical day, and 14-day trend lines. Switch between Dark, Light and Auto (follows the iPhone) at the top of Settings.
 - **Private.** Readings live only on each phone. Family members each install it and track their own home.
 
 ## How the maths works

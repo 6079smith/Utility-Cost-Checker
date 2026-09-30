@@ -682,7 +682,22 @@ function tariffMismatch(fuel) {
 function renderSettings() {
   const s = getState();
   const ai = s.settings.ai;
+  const theme = s.settings.theme || 'dark';
   view.innerHTML = `
+    <h2>Appearance</h2>
+    <div class="card">
+      <div class="segmented" role="group" aria-label="Theme">
+        ${[
+          ['dark', 'Dark'],
+          ['light', 'Light'],
+          ['system', 'Auto'],
+        ]
+          .map(([v, l]) => `<button type="button" data-theme-opt="${v}" aria-pressed="${theme === v}">${l}</button>`)
+          .join('')}
+      </div>
+      <p class="tiny" style="margin-top:8px">Auto follows your iPhone’s light/dark setting.</p>
+    </div>
+
     <h2>Your home</h2>
     <div class="card">
       <label for="postcode">Postcode <span class="tiny">(sets your electricity region for Octopus prices)</span></label>
@@ -770,16 +785,6 @@ function renderSettings() {
         <input id="api-key" type="password" autocapitalize="off" value="${esc(ai.apiKey)}" placeholder="sk-ant-…" />
         <p class="tiny" style="margin-top:6px">Stored only on this phone and sent only to Anthropic.</p>
       </div>
-    </div>
-
-    <h2>Appearance</h2>
-    <div class="card">
-      <label for="theme">Theme</label>
-      <select id="theme">
-        <option value="dark" ${(s.settings.theme || 'dark') === 'dark' ? 'selected' : ''}>Dark</option>
-        <option value="light" ${s.settings.theme === 'light' ? 'selected' : ''}>Light</option>
-        <option value="system" ${s.settings.theme === 'system' ? 'selected' : ''}>Match iPhone</option>
-      </select>
     </div>
 
     <h2>Share with family</h2>
@@ -880,10 +885,13 @@ function renderSettings() {
   bindAi('#api-key', 'apiKey');
 
   // Appearance
-  view.querySelector('#theme').addEventListener('change', (e) => {
-    update((st) => (st.settings.theme = e.target.value));
-    applyTheme();
-  });
+  view.querySelectorAll('[data-theme-opt]').forEach((b) =>
+    b.addEventListener('click', () => {
+      update((st) => (st.settings.theme = b.dataset.themeOpt));
+      applyTheme();
+      view.querySelectorAll('[data-theme-opt]').forEach((x) => x.setAttribute('aria-pressed', x === b));
+    }),
+  );
 
   // Share
   view.querySelector('#share').addEventListener('click', async () => {
