@@ -429,8 +429,12 @@ function renderAdd() {
         <div><button type="button" class="linkish" id="swap">⇄ Swap day and night</button></div>
       </div>
       <p id="prev" class="tiny" style="margin-top:6px"></p>
-      <label for="at">Date and time of reading</label>
-      <input id="at" type="datetime-local" value="${localInputValue(Date.now())}" required />
+      <label for="at-date">Date and time of reading</label>
+      <div class="row">
+        <input id="at-date" type="date" value="${localInputValue(Date.now()).slice(0, 10)}" max="${localInputValue(Date.now()).slice(0, 10)}" required />
+        <input id="at-time" type="time" value="${localInputValue(Date.now()).slice(11, 16)}" style="flex:0 0 42%" />
+      </div>
+      <p id="at-show" class="tiny" style="margin-top:6px"></p>
       <label class="check" style="margin-top:14px"><input type="checkbox" id="reset" /> New or replaced meter (start counting again)</label>
       <div id="estimate" class="small" style="margin-top:12px"></div>
       <div id="form-error" class="error"></div>
@@ -440,7 +444,15 @@ function renderAdd() {
   const $ = (sel) => view.querySelector(sel);
   $('#value').dataset.digits = METER_DIGITS[fuel];
   ['#value', '#day', '#night'].forEach((id) => digitInput($(id)));
-  const atEl = $('#at');
+  const dateEl = $('#at-date');
+  const timeEl = $('#at-time');
+  /** The reading's date/time from the two fields (noon if no time given). */
+  const readAt = () => Date.parse(`${dateEl.value}T${timeEl.value || '12:00'}`);
+  const setAt = (t) => {
+    const v = localInputValue(t);
+    dateEl.value = v.slice(0, 10);
+    timeEl.value = v.slice(11, 16);
+  };
   const resetEl = $('#reset');
   const statusEl = $('#ai-status');
   const estimateEl = $('#estimate');
@@ -470,7 +482,10 @@ function renderAdd() {
     $('#single-fields').hidden = e7();
     $('#e7-fields').hidden = !e7();
     if ($('#e7-photo-tip')) $('#e7-photo-tip').hidden = !e7();
-    const at = Date.parse(atEl.value);
+    const at = readAt();
+    $('#at-show').textContent = Number.isFinite(at)
+      ? 'Will be saved as ' + new Date(at).toLocaleString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })
+      : 'Choose a date.';
     const prev = lastReading(fuel, Number.isFinite(at) ? at : Infinity);
     const prevEl = $('#prev');
     prevEl.textContent = prev ? `Previous: ${describeReading(prev, fuel)} on ${fmtDateTime(prev.at)}` : 'This is your first reading for this meter.';
@@ -529,13 +544,13 @@ function renderAdd() {
   );
   $('#swap').addEventListener('click', swap);
   for (const el of [$('#value'), $('#day'), $('#night')]) el.addEventListener('input', () => ((source = 'manual'), refresh()));
-  [atEl, resetEl].forEach((el) => el.addEventListener('input', refresh));
+  [dateEl, timeEl, resetEl].forEach((el) => ['input', 'change', 'blur'].forEach((ev) => el.addEventListener(ev, refresh)));
 
   $('#photo')?.addEventListener('change', async (e) => {
     const file = e.target.files?.[0];
     e.target.value = '';
     if (!file) return;
-    atEl.value = localInputValue(file.lastModified && Date.now() - file.lastModified < 7 * DAY ? file.lastModified : Date.now());
+    setAt(file.lastModified && Date.now() - file.lastModified < 7 * DAY ? file.lastModified : Date.now());
     let image;
     try {
       image = await prepareImage(file);
@@ -613,7 +628,7 @@ function renderAdd() {
   $('#reading-form').addEventListener('submit', async (e) => {
     e.preventDefault();
     const d = draft();
-    const at = Date.parse(atEl.value);
+    const at = readAt();
     if (!d || d.value < 0 || d.night < 0) {
       return (errEl.textContent = e7() ? 'Enter both the day and night readings.' : 'Enter the reading shown on the meter.');
     }
@@ -623,11 +638,16 @@ function renderAdd() {
     if (goesBackwards(d, prev) && !resetEl.checked) {
       return (errEl.textContent = 'Lower than the previous reading. Check it, or tick “New or replaced meter”.');
     }
+    // Back-dated reading: it must also fit below the next reading after it.
+    const next = readingsFor(fuel).find((r) => Date.parse(r.at) > at);
+    if (next && !next.reset && goesBackwards(next, d)) {
+      return (errEl.textContent = `Higher than your later reading on ${fmtDateTime(next.at)} (${describeReading(next, fuel)}). Check the date and number, or delete that reading in History.`);
+    }
     update((st) => {
       st.readings.push({ id: uid(), fuel, at: new Date(at).toISOString(), ...d, source, reset: resetEl.checked || undefined });
     });
     requestPersistence();
-    toast(`${fuelName(fuel)} reading saved`);
+    toast(`${fuelName(fuel)} reading saved for ${fmtDate(at, { day: 'numeric', month: 'short', year: 'numeric' })}`);
     await refreshOctopusIfNeeded(fuel).catch(() => {});
     location.hash = '#home';
   });
@@ -666,8 +686,19 @@ function renderHistory() {
         ? `<ul class="list">${readings
             .map(
               (r) => `<li><div class="main"><div><strong class="mono">${describeReading(r, historyFuel)}</strong>${r.reset ? ' <span class="badge">new meter</span>' : ''}</div>
-                <div class="tiny">${fmtDateTime(r.at)} · ${r.source === 'photo' ? 'from photo' : 'typed'}</div></div>
-                <button class="btn danger small" data-del="${esc(r.id)}" aria-label="Delete reading">Delete</button></li>`,
+                <div class="tiny">${fmtDateTime(r.at)} · ${r.source === 'photo' ? 'from photo' : 'typed'}</div>
+                <div class="edit-at" data-edit-for="${esc(r.id)}" hidden>
+                  <div class="row" style="margin-top:8px">
+                    <input type="date" value="${localInputValue(r.at).slice(0, 10)}" max="${localInputValue(Date.now()).slice(0, 10)}" />
+                    <input type="time" value="${localInputValue(r.at).slice(11, 16)}" style="flex:0 0 42%" />
+                  </div>
+                  <div class="row" style="margin-top:6px"><button class="btn small" type="button" data-save-at="${esc(r.id)}">Save date</button>
+                    <button class="btn secondary small" type="button" data-cancel-at="${esc(r.id)}">Cancel</button></div>
+                </div></div>
+                <div style="display:flex;flex-direction:column;gap:4px;align-items:flex-end">
+                  <button class="btn secondary small" data-edit="${esc(r.id)}" aria-label="Change date">Edit date</button>
+                  <button class="btn danger small" data-del="${esc(r.id)}" aria-label="Delete reading">Delete</button>
+                </div></li>`,
             )
             .join('')}</ul>`
         : '<p class="muted">No readings yet.</p>'
@@ -675,6 +706,28 @@ function renderHistory() {
   view.querySelectorAll('[data-fuel]').forEach((b) =>
     b.addEventListener('click', () => {
       historyFuel = b.dataset.fuel;
+      renderHistory();
+    }),
+  );
+  view.querySelectorAll('[data-edit]').forEach((b) =>
+    b.addEventListener('click', () => (view.querySelector(`[data-edit-for="${b.dataset.edit}"]`).hidden = false)),
+  );
+  view.querySelectorAll('[data-cancel-at]').forEach((b) =>
+    b.addEventListener('click', () => (view.querySelector(`[data-edit-for="${b.dataset.cancelAt}"]`).hidden = true)),
+  );
+  view.querySelectorAll('[data-save-at]').forEach((b) =>
+    b.addEventListener('click', () => {
+      const box = view.querySelector(`[data-edit-for="${b.dataset.saveAt}"]`);
+      const [dateIn, timeIn] = box.querySelectorAll('input');
+      const at = Date.parse(`${dateIn.value}T${timeIn.value || '12:00'}`);
+      if (!Number.isFinite(at)) return toast('Choose a date');
+      if (at > Date.now() + 5 * 60e3) return toast('That date is in the future');
+      update((st) => {
+        const r = st.readings.find((x) => x.id === b.dataset.saveAt);
+        if (r) r.at = new Date(at).toISOString();
+      });
+      toast('Date changed');
+      refreshOctopusIfNeeded(historyFuel).catch(() => {});
       renderHistory();
     }),
   );
