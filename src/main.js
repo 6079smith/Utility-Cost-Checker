@@ -61,10 +61,13 @@ const fmtTime = (t) => new Date(t).toLocaleTimeString('en-GB', { hour: '2-digit'
 const fuelVar = (f) => (f === 'gas' ? 'gas' : 'elec');
 
 /** A meter reading as digit boxes, like the drums on the meter. */
+/** How many whole-number digits each meter shows. */
+const METER_DIGITS = { electricity: 5, gas: 4 };
+
 function digitBoxes(value, fuel, { unit = true } = {}) {
   const [whole, frac] = String(value).split('.');
   let html = `<div class="digits" role="img" aria-label="${esc(value)} ${esc(meterUnit(fuel))}">`;
-  html += [...whole.padStart(5, '0')].map((d) => `<span>${d}</span>`).join('');
+  html += [...whole.padStart(METER_DIGITS[fuel], '0')].map((d) => `<span>${d}</span>`).join('');
   if (frac) html += '<span class="sep">.</span>' + [...frac].map((d) => `<span class="frac">${d}</span>`).join('');
   if (unit) html += `<span class="unit">${esc(meterUnit(fuel))}</span>`;
   return html + '</div>';
@@ -82,19 +85,22 @@ function digitInput(input) {
   boxes.className = 'digits big';
   boxes.setAttribute('aria-hidden', 'true');
   wrap.append(boxes, input);
+  const max = () => Number(input.dataset.digits) || 5;
+  // Whole digits only, and no more than the meter has.
+  const clean = () => {
+    const v = input.value.replace(/\D/g, '').slice(0, max());
+    if (v !== input.value) input.value = v;
+    input.maxLength = max();
+  };
   const render = () => {
+    clean();
+    const n = max();
     const focused = document.activeElement === input;
-    let text = input.value.replace(/[^0-9.]/g, '');
     // Show leading zeros like the meter's drums (display only).
-    if (!focused && text) {
-      const [whole, frac] = text.split('.');
-      text = whole.padStart(5, '0') + (frac !== undefined ? '.' + frac : '');
-    }
+    const text = !focused && input.value ? input.value.padStart(n, '0') : input.value;
     const chars = [...text];
-    const n = Math.max(5, chars.length + (focused && chars.length < 9 ? 1 : 0));
     boxes.innerHTML = Array.from({ length: n }, (_, i) => {
       const c = chars[i];
-      if (c === '.') return '<span class="sep">.</span>';
       const cls = [c === undefined ? 'empty' : '', focused && i === chars.length ? 'cur' : ''].join(' ').trim();
       return `<span class="${cls}">${c ?? '0'}</span>`;
     }).join('');
@@ -392,13 +398,13 @@ function renderAdd() {
     <form id="reading-form" class="card" novalidate>
       <div id="single-fields">
         <label class="caps" for="value">Meter reading (<span class="unit"></span>)</label>
-        <input id="value" inputmode="decimal" autocomplete="off" />
+        <input id="value" inputmode="numeric" pattern="[0-9]*" autocomplete="off" />
       </div>
       <div id="e7-fields" hidden>
         <label class="caps" for="day">Day / Normal (kWh)</label>
-        <input id="day" inputmode="decimal" autocomplete="off" />
+        <input id="day" inputmode="numeric" pattern="[0-9]*" autocomplete="off" data-digits="5" />
         <label class="caps" for="night">Night / Low (kWh)</label>
-        <input id="night" inputmode="decimal" autocomplete="off" />
+        <input id="night" inputmode="numeric" pattern="[0-9]*" autocomplete="off" data-digits="5" />
         <div><button type="button" class="linkish" id="swap">⇄ Swap day and night</button></div>
       </div>
       <p id="prev" class="tiny" style="margin-top:6px"></p>
@@ -411,6 +417,7 @@ function renderAdd() {
     </form>`;
 
   const $ = (sel) => view.querySelector(sel);
+  $('#value').dataset.digits = METER_DIGITS[fuel];
   ['#value', '#day', '#night'].forEach((id) => digitInput($(id)));
   const atEl = $('#at');
   const resetEl = $('#reset');
@@ -449,6 +456,7 @@ function renderAdd() {
     const typeChanged = prev && fuel === 'electricity' && (typeof prev.night === 'number') !== e7();
     if (typeChanged) prevEl.textContent += e7() ? '. That was a single-rate reading, so Economy 7 counting starts from this one.' : '. That was an Economy 7 reading, so single-rate counting starts from this one.';
 
+    $('#value').dataset.digits = METER_DIGITS[fuel];
     ['#value', '#day', '#night'].forEach((id) => $(id)._render?.());
     errEl.textContent = '';
     estimateEl.innerHTML = '';
@@ -490,7 +498,11 @@ function renderAdd() {
 
   view.querySelectorAll('[data-fuel]').forEach((b) =>
     b.addEventListener('click', () => {
+      if (b.dataset.fuel === fuel) return;
       fuel = b.dataset.fuel;
+      // A number typed for the other meter doesn't belong to this one.
+      $('#value').value = '';
+      source = 'manual';
       refresh();
     }),
   );
@@ -540,8 +552,12 @@ function renderAdd() {
       }
       if (e7()) {
         const mapped = mapRegisters(regs, getState().settings.electricity.rate1Is);
-        if (mapped.day !== null) $('#day').value = String(mapped.day);
-        if (mapped.night !== null) $('#night').value = String(mapped.night);
+        const fits = (v) => String(Math.round(v)).length <= METER_DIGITS.electricity;
+        if (mapped.day !== null && fits(mapped.day)) $('#day').value = String(Math.round(mapped.day));
+        if (mapped.night !== null && fits(mapped.night)) $('#night').value = String(Math.round(mapped.night));
+        if ([mapped.day, mapped.night].some((v) => v !== null && !fits(v))) {
+          html += `<div class="notice">That reading has more than ${METER_DIGITS.electricity} digits, so it couldn’t be filled in. Please type it.</div>`;
+        }
         html += `Read ${regs.map((r) => `<strong>${esc(r.label)}</strong> ${esc(r.digits)}`).join(', ')}
           <span class="badge ${esc(result.confidence)}">${esc(result.confidence)} confidence</span>`;
         if (mapped.ambiguous) html += `<div class="notice">Couldn’t tell which is day and which is night. Check the boxes below, and use “Swap” if needed.</div>`;
@@ -552,7 +568,9 @@ function renderAdd() {
           html += `<div class="tiny">Only one rate was visible. Press the button on your meter to show the other rate, then take another photo (or type it in).</div>`;
         }
       } else {
-        $('#value').value = String(regs[0].value);
+        const whole = String(Math.round(regs[0].value));
+        if (whole.length <= METER_DIGITS[fuel]) $('#value').value = whole;
+        else html += `<div class="notice">That reading has more than ${METER_DIGITS[fuel]} digits, so it couldn’t be filled in. Please type it.</div>`;
         html += `Read <strong>${esc(regs[0].digits)}</strong> <span class="badge ${esc(result.confidence)}">${esc(result.confidence)} confidence</span>`;
         if (fuel === 'electricity' && regs.length > 1) {
           html += `<div class="notice">This meter shows ${regs.length} rates, so it may be Economy 7. Switch “Electricity meter” to Economy 7 in Settings.</div>`;
