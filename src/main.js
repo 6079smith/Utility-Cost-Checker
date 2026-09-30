@@ -138,11 +138,31 @@ function sparkValues(daily) {
 }
 const meterUnit = (f) => (f === 'gas' ? (getState().settings.gas.units === 'ft3' ? 'ft³' : 'm³') : 'kWh');
 
+/** "today", "yesterday" or "3 days ago", by calendar day. */
 function ago(t) {
-  const d = Math.floor((Date.now() - t) / DAY);
+  const midnight = (x) => {
+    const d = new Date(x);
+    d.setHours(0, 0, 0, 0);
+    return d.getTime();
+  };
+  const d = Math.round((midnight(Date.now()) - midnight(t)) / DAY);
   if (d <= 0) return 'today';
   if (d === 1) return 'yesterday';
   return `${d} days ago`;
+}
+
+/**
+ * Time the current run of readings began: the latest "new or replaced meter"
+ * reading, or the latest switch between single-rate and Economy 7 readings.
+ */
+function seriesStart(readings) {
+  let start = readings[0];
+  for (let i = 1; i < readings.length; i++) {
+    const r = readings[i];
+    const changedType = (typeof r.night === 'number') !== (typeof readings[i - 1].night === 'number');
+    if (r.reset || changedType) start = r;
+  }
+  return start ? Date.parse(start.at) : 0;
 }
 
 function localInputValue(date) {
@@ -276,7 +296,8 @@ function renderHome() {
     if (!readings.length && !currentTariff(fuel)) continue;
     const an = a[fuel];
     const last = readings[readings.length - 1];
-    const latest = latestPeriod(an.intervals);
+    // Only the current meter's readings (ignore anything before a new/replaced meter).
+    const latest = latestPeriod(an.intervals.filter((iv) => iv.from >= seriesStart(readings)));
     const e7Reading = last && typeof last.night === 'number';
     html += `<div class="card"><div class="fuel-head"><i class="swatch ${fuel}"></i>${fuelName(fuel)}${
       e7Reading ? '<span class="tag">E7</span>' : ''
@@ -831,6 +852,8 @@ function renderSettings() {
       <div class="row"><button class="btn secondary" id="export" type="button">Save backup</button>
         <label class="btn secondary" for="import-file">Restore</label></div>
       <input type="file" id="import-file" accept="application/json,.json" hidden />
+      <button class="btn danger" id="clear-readings" type="button">Delete all readings</button>
+      <p class="tiny" style="text-align:center">Clears test or old readings. Your tariffs and settings are kept.</p>
     </div>
     <p class="tiny" style="text-align:center;margin-top:24px">Estimates only. Your supplier’s bill is based on its own readings and rounding.</p>`;
 
@@ -952,6 +975,13 @@ function renderSettings() {
     a.download = name;
     a.click();
     setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  });
+  view.querySelector('#clear-readings').addEventListener('click', () => {
+    const n = getState().readings.length;
+    if (!n) return toast('There are no readings to delete');
+    if (!confirm(`Delete all ${n} readings from this phone? Your tariffs and settings are kept. This can’t be undone unless you have a backup.`)) return;
+    update((st) => (st.readings = []));
+    toast('All readings deleted');
   });
   view.querySelector('#import-file').addEventListener('change', async (e) => {
     const file = e.target.files?.[0];
