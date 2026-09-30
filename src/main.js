@@ -1139,7 +1139,7 @@ function openTariffForm(fuel) {
                <input id="bill-${fuel}" type="file" accept="image/*,application/pdf" hidden />
                <p class="tiny" style="margin-top:6px;text-align:center">Photo or PDF of a bill or annual statement. You can check everything before saving.</p>
                <div class="small" data-bill-status style="margin-top:6px"></div>`
-            : ''
+            : `<p class="notice" style="margin-top:14px">To read prices from a bill photo or PDF, turn on <b>Photo reading</b> further down Settings (Family helper link or your own key). Or type them below.</p>`
         }
         <label for="label-${fuel}">Supplier / tariff name</label>
         <input id="label-${fuel}" placeholder="e.g. British Gas Standard Variable" />
