@@ -67,6 +67,8 @@ In **Settings → Share with family**, tap **Share app link** (tick "Include pho
 - **"Rate 1" and "Rate 2" labels** don't mean the same thing on every meter. Set which one is night in Settings; your bill will tell you (the cheaper one is night).
 - **Swapped readings** are flagged: if day and night look the wrong way round compared with your last reading, the app offers to swap them.
 
+**Tariff history:** each fuel keeps a list of tariffs with start and end dates (Settings → *Add tariff*, *Edit dates*). Enter past contracts with their dates and every day between readings is charged at the tariff that applied that day. Dates can't overlap; one contract ending 16 Aug and the next starting 17 Aug is fine.
+
 **Changing supplier:** Settings → *Change tariff or supplier* → set the date the new tariff started.
 
 **Backups:** Settings → *Save backup* (share to Files/iCloud Drive). Use *Restore* on a new phone.
@@ -87,6 +89,7 @@ npm run build   # production build in dist/
 | `src/registers.js` | Maps register labels (Low/Normal, Rate 1/2, 1.8.1/1.8.2) to Economy 7 day/night |
 | `src/meterPrompt.js` | Claude prompt and JSON schema for meter reading (shared with the Worker) |
 | `src/meterReader.js` | Photo resize and call to the helper (or directly with your own API key) |
+| `src/tariffPlan.js` | Tariff date rules: no overlaps, one open-ended tariff, back-to-back contracts |
 | `src/store.js` | On-device storage, tariff switching, backup |
 | `src/main.js` | Screens: Home, Add reading, History, Settings |
 | `worker/` | Cloudflare Worker: `/read-meter` and `/octopus/*` relay |

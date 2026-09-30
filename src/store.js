@@ -86,22 +86,10 @@ export function currentTariff(fuel) {
   return tariffsFor(fuel).find((t) => !t.to) || null;
 }
 
-/**
- * Start a new tariff from `fromIso`, closing whichever tariff was current.
- * Past readings keep being costed at the old tariff’s prices.
- */
-export function switchTariff(tariff) {
+/** Replace one fuel's tariff history (already checked by tariffPlan.js). */
+export function setTariffs(fuel, list) {
   update((s) => {
-    const cur = s.tariffs.find((t) => t.fuel === tariff.fuel && !t.to);
-    if (cur) {
-      if (Date.parse(tariff.from) <= Date.parse(cur.from)) {
-        // Same or earlier start: replace instead of creating a zero-length tariff.
-        s.tariffs = s.tariffs.filter((t) => t !== cur);
-      } else {
-        cur.to = tariff.from;
-      }
-    }
-    s.tariffs.push({ id: uid(), to: null, ...tariff });
+    s.tariffs = [...s.tariffs.filter((t) => t.fuel !== fuel), ...list];
   });
 }
 

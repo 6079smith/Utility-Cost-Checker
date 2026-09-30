@@ -8,7 +8,7 @@ import {
   lastReading,
   tariffsFor,
   currentTariff,
-  switchTariff,
+  setTariffs,
   isEconomy7,
   exportJson,
   importJson,
@@ -29,11 +29,11 @@ import { REGIONS, regionForPostcode, listProducts, fetchRates } from './octopus.
 import { prepareImage, readMeter, aiAvailable } from './meterReader.js';
 import { renderDailyChart, ringSvg, sparkSvg } from './chart.js';
 import { classifyLabel, mapRegisters, looksSwapped } from './registers.js';
+import { SINCE_START, planAdd, planEdit } from './tariffPlan.js';
 
 const view = document.getElementById('view');
 const title = document.getElementById('page-title');
 const DAY = 86400e3;
-const SINCE_START = '2000-01-01T00:00:00.000Z';
 const RATE_REFRESH_MS = 12 * 3600e3;
 
 // ---------- formatting ----------
@@ -764,6 +764,24 @@ function tariffSummary(t) {
   return `<strong>${esc(t.label || 'Other supplier')}</strong><div class="tiny">${priceText(t.unitRate, t.nightRate, t.standingCharge)}</div>`;
 }
 
+const longDate = (t) => fmtDate(t, { day: 'numeric', month: 'short', year: 'numeric' });
+/** A tariff's dates as people say them: the end date is the last day on it. */
+function tariffRange(t) {
+  const from = t.from === SINCE_START ? 'From your first reading' : longDate(t.from);
+  const to = t.to ? longDate(Date.parse(t.to) - 12 * 3600e3) : 'now';
+  return `${from} – ${to}`;
+}
+const describeTariff = (t) => `“${t.label || t.productCode || 'tariff'}” (${tariffRange(t)})`;
+/** Date-input value → ISO at local midnight; end dates are inclusive, so store the next midnight. */
+const startIso = (v) => new Date(v + 'T00:00:00').toISOString();
+function endIso(v) {
+  const d = new Date(v + 'T00:00:00');
+  d.setDate(d.getDate() + 1);
+  return d.toISOString();
+}
+const startInput = (t) => (t.from === SINCE_START ? '' : localInputValue(t.from).slice(0, 10));
+const endInput = (t) => (t.to ? localInputValue(Date.parse(t.to) - 12 * 3600e3).slice(0, 10) : '');
+
 /** Warn when the electricity tariff doesn't match the meter type. */
 function tariffMismatch(fuel) {
   const t = currentTariff(fuel);
@@ -831,19 +849,36 @@ function renderSettings() {
         ${tariffMismatch(fuel)}
         <div class="row" style="margin-top:10px">
           ${currentTariff(fuel)?.supplier === 'octopus' ? `<button class="btn secondary small" data-refresh="${fuel}" type="button">Update prices</button>` : ''}
-          <button class="btn secondary small" data-edit="${fuel}" type="button">${currentTariff(fuel) ? 'Change tariff or supplier' : 'Set tariff'}</button>
+          <button class="btn secondary small" data-edit="${fuel}" type="button">${tariffsFor(fuel).length ? 'Add tariff' : 'Set tariff'}</button>
         </div>
         <div class="tariff-form"></div>
         ${
-          tariffsFor(fuel).length > 1
-            ? `<details><summary>Previous tariffs</summary><ul class="list">${tariffsFor(fuel)
-                .filter((t) => t.to)
-                .reverse()
-                .map(
-                  (t) => `<li><div class="main">${tariffSummary(t)}<div class="tiny">${t.from === SINCE_START ? 'Start' : fmtDate(t.from, { day: 'numeric', month: 'short', year: 'numeric' })} – ${fmtDate(t.to, { day: 'numeric', month: 'short', year: 'numeric' })}</div></div>
-                  <button class="btn danger small" data-del-tariff="${esc(t.id)}">Delete</button></li>`,
-                )
-                .join('')}</ul></details>`
+          tariffsFor(fuel).length
+            ? `<div class="caps" style="margin-top:16px">Tariff history</div>
+               <ul class="list">${[...tariffsFor(fuel)]
+                 .reverse()
+                 .map(
+                   (t) => `<li style="display:block">
+                     <div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start">
+                       <div class="main">${tariffSummary(t)}<div class="small" style="margin-top:2px">${tariffRange(t)}</div></div>
+                       <div style="display:flex;flex-direction:column;gap:4px;align-items:flex-end;flex:none">
+                         <button class="btn secondary small" type="button" data-tedit="${esc(t.id)}">Edit dates</button>
+                         <button class="btn danger small" type="button" data-tdel="${esc(t.id)}">Delete</button>
+                       </div>
+                     </div>
+                     <div data-tdates="${esc(t.id)}" hidden>
+                       <div class="row" style="margin-top:8px">
+                         <div><label>Start</label><input type="date" data-k="from" value="${startInput(t)}" /></div>
+                         <div><label>End</label><input type="date" data-k="to" value="${endInput(t)}" /></div>
+                       </div>
+                       <p class="tiny" style="margin-top:6px">Leave End blank if you’re still on it${t.from === SINCE_START ? ', and Start blank to cover all earlier readings' : ''}.</p>
+                       <div class="error" data-terr></div>
+                       <div class="row" style="margin-top:6px"><button class="btn small" type="button" data-tsave="${esc(t.id)}">Save dates</button>
+                         <button class="btn secondary small" type="button" data-tcancel="${esc(t.id)}">Cancel</button></div>
+                     </div>
+                   </li>`,
+                 )
+                 .join('')}</ul>`
             : ''
         }
       </div>`,
@@ -943,10 +978,35 @@ function renderSettings() {
       renderSettings();
     }),
   );
-  view.querySelectorAll('[data-del-tariff]').forEach((b) =>
+  const tariffById = (id) => getState().tariffs.find((t) => t.id === id);
+  view.querySelectorAll('[data-tedit]').forEach((b) =>
+    b.addEventListener('click', () => (view.querySelector(`[data-tdates="${b.dataset.tedit}"]`).hidden = false)),
+  );
+  view.querySelectorAll('[data-tcancel]').forEach((b) =>
+    b.addEventListener('click', () => (view.querySelector(`[data-tdates="${b.dataset.tcancel}"]`).hidden = true)),
+  );
+  view.querySelectorAll('[data-tsave]').forEach((b) =>
+    b.addEventListener('click', async () => {
+      const t = tariffById(b.dataset.tsave);
+      const box = view.querySelector(`[data-tdates="${t.id}"]`);
+      const fromV = box.querySelector('[data-k=from]').value;
+      const toV = box.querySelector('[data-k=to]').value;
+      const list = tariffsFor(t.fuel);
+      const earliest = list[0]?.id === t.id;
+      if (!fromV && !earliest) return (box.querySelector('[data-terr]').textContent = 'Choose a start date.');
+      const plan = planEdit(list, t.id, fromV ? startIso(fromV) : SINCE_START, toV ? endIso(toV) : null, describeTariff);
+      if (!plan.ok) return (box.querySelector('[data-terr]').textContent = plan.error);
+      setTariffs(t.fuel, plan.list);
+      toast('Tariff dates saved');
+      if (t.supplier === 'octopus') await refreshOctopus(tariffById(t.id)).catch((e) => toast(e.message));
+      renderSettings();
+    }),
+  );
+  view.querySelectorAll('[data-tdel]').forEach((b) =>
     b.addEventListener('click', () => {
-      if (!confirm('Delete this old tariff? Readings from that time will show no cost.')) return;
-      update((st) => (st.tariffs = st.tariffs.filter((t) => t.id !== b.dataset.delTariff)));
+      const t = tariffById(b.dataset.tdel);
+      if (!confirm(`Delete ${describeTariff(t)}? Readings from that time will show no cost until another tariff covers them.`)) return;
+      update((st) => (st.tariffs = st.tariffs.filter((x) => x.id !== t.id)));
       renderSettings();
     }),
   );
@@ -1070,11 +1130,11 @@ function openTariffForm(fuel) {
         <label for="product-${fuel}">Octopus tariff</label>
         <select id="product-${fuel}"><option value="">Loading tariffs…</option></select>
         <label for="code-${fuel}">…or product code <span class="tiny">(from your Octopus account, e.g. VAR-22-11-01)</span></label>
-        <input id="code-${fuel}" autocapitalize="characters" autocomplete="off" value="${cur?.supplier === 'octopus' ? esc(cur.productCode) : ''}" />
+        <input id="code-${fuel}" autocapitalize="characters" autocomplete="off" />
       </div>
       <div data-part="manual" hidden>
         <label for="label-${fuel}">Supplier / tariff name</label>
-        <input id="label-${fuel}" placeholder="e.g. British Gas Standard Variable" value="${cur?.supplier === 'manual' ? esc(cur.label) : ''}" />
+        <input id="label-${fuel}" placeholder="e.g. British Gas Standard Variable" />
         ${
           e7
             ? `<div class="row">
@@ -1090,12 +1150,13 @@ function openTariffForm(fuel) {
         <label class="check" style="margin-top:12px"><input type="checkbox" id="incvat-${fuel}" checked /> These prices include VAT</label>
         <p class="tiny" style="margin-top:6px">These are on your bill or in your supplier app. Environmental and social levies are already built into them.</p>
       </div>
-      ${
-        cur
-          ? `<label for="from-${fuel}">New tariff starts</label><input id="from-${fuel}" type="date" value="${dayKey(today)}" />
-             <p class="tiny" style="margin-top:6px">Readings before this date keep the old prices.</p>`
-          : ''
-      }
+      <div class="row">
+        <div><label for="from-${fuel}">Start date</label><input id="from-${fuel}" type="date" value="${cur ? dayKey(today) : ''}" /></div>
+        <div><label for="to-${fuel}">End date</label><input id="to-${fuel}" type="date" /></div>
+      </div>
+      <p class="tiny" style="margin-top:6px">Leave End blank if you’re still on this tariff${
+        tariffsFor(fuel).length ? '' : ', and Start blank to cover all your readings'
+      }. Each day is charged at the tariff that applied that day. For a past contract, enter its start and end dates.</p>
       <div class="error" data-err></div>
       <button class="btn" type="submit">Save tariff</button>
       <button class="btn danger" type="button" data-cancel>Cancel</button>
@@ -1130,11 +1191,17 @@ function openTariffForm(fuel) {
     e.preventDefault();
     const err = holder.querySelector('[data-err]');
     err.textContent = '';
-    const fromInput = holder.querySelector(`#from-${fuel}`)?.value;
-    const from = fromInput ? new Date(fromInput + 'T00:00:00').toISOString() : SINCE_START;
-    if (cur && Date.parse(from) <= Date.parse(cur.from) && cur.from !== SINCE_START) {
-      if (!confirm('This starts on or before the current tariff, so it will replace it. Continue?')) return;
-    }
+    const fromInput = holder.querySelector(`#from-${fuel}`).value;
+    const toInput = holder.querySelector(`#to-${fuel}`).value;
+    if (!fromInput && tariffsFor(fuel).length) return (err.textContent = 'Choose the date this tariff started.');
+    const from = fromInput ? startIso(fromInput) : SINCE_START;
+    const to = toInput ? endIso(toInput) : null;
+    /** Check the dates against the history, then save. */
+    const plan = (t) => {
+      const p = planAdd(tariffsFor(fuel), t, describeTariff);
+      if (!p.ok) err.textContent = p.error;
+      return p;
+    };
     const submit = holder.querySelector('button[type=submit]');
     if (supplier === 'manual') {
       const unit = parseFloat(holder.querySelector(`#unit-${fuel}`).value);
@@ -1144,16 +1211,21 @@ function openTariffForm(fuel) {
         return (err.textContent = e7 ? 'Enter the day rate, night rate and standing charge in pence.' : 'Enter the unit rate and standing charge in pence.');
       }
       const div = holder.querySelector(`#incvat-${fuel}`).checked ? 1 + getState().settings.vatRate : 1;
-      switchTariff({
+      const p = plan({
+        id: uid(),
         fuel,
         supplier: 'manual',
         from,
+        to,
         label: holder.querySelector(`#label-${fuel}`).value.trim() || 'Other supplier',
         registers: e7 ? 2 : 1,
         unitRate: unit / div,
         nightRate: e7 ? night / div : null,
         standingCharge: stand / div,
       });
+      if (!p.ok) return;
+      setTariffs(fuel, p.list);
+      p.notes.forEach((n, i) => setTimeout(() => toast(n), 2800 * (i + 1)));
     } else {
       const code = codeEl.value.trim().toUpperCase();
       const region = getState().settings.region;
@@ -1166,10 +1238,17 @@ function openTariffForm(fuel) {
         fuel,
         supplier: 'octopus',
         from,
+        to,
         productCode: code,
         registers: e7 ? 2 : 1,
         label: productsCache?.find((p) => p.code === code)?.name || code,
       };
+      const p = plan(draft);
+      if (!p.ok) {
+        submit.disabled = false;
+        submit.textContent = 'Save tariff';
+        return;
+      }
       try {
         await loadOctopusRates(draft);
       } catch (ex) {
@@ -1177,7 +1256,8 @@ function openTariffForm(fuel) {
         submit.textContent = 'Save tariff';
         return (err.textContent = ex.message);
       }
-      switchTariff(draft);
+      setTariffs(fuel, p.list);
+      p.notes.forEach((n, i) => setTimeout(() => toast(n), 2800 * (i + 1)));
     }
     toast(`${fuelName(fuel)} tariff saved`);
     renderSettings();
@@ -1189,6 +1269,9 @@ function openTariffForm(fuel) {
 function rateWindowStart(t) {
   const first = readingsFor(t.fuel)[0];
   const earliest = first ? Date.parse(first.at) - DAY : Date.now() - DAY;
+  // A known start date: fetch from then (it may be a past contract). Otherwise
+  // cover the readings.
+  if (t.from !== SINCE_START) return new Date(Date.parse(t.from));
   return new Date(Math.max(Date.parse(t.from), earliest));
 }
 
