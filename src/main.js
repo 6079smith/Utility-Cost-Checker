@@ -24,6 +24,7 @@ import {
   tariffSegments,
   costInterval,
   MIN_RATE_HOURS,
+  checkCalorificValue,
 } from './calc.js';
 import { REGIONS, regionForPostcode, listProducts, fetchRates } from './octopus.js';
 import { prepareImage, readMeter, readBill, aiAvailable } from './meterReader.js';
@@ -1219,6 +1220,25 @@ function openTariffForm(fuel) {
       status.innerHTML = `<span class="badge ${esc(bill.confidence)}">${esc(bill.confidence)} confidence</span>
         Filled in from the bill${bill.bill_period_start && bill.bill_period_end ? ` (bill for ${esc(bill.bill_period_start)} to ${esc(bill.bill_period_end)})` : ''}. Check the figures before saving.
         ${notes.map((n) => `<div class="tiny" style="margin-top:4px">${n}</div>`).join('')}`;
+      if (fuel === 'gas') {
+        const cv = f.calorific_value;
+        const kind = checkCalorificValue(cv);
+        const current = getState().settings.gas.calorificValue;
+        if (kind === 'bad') {
+          status.insertAdjacentHTML('beforeend', `<div class="tiny" style="margin-top:4px">The calorific value on the bill (${esc(cv)}) looks wrong, so it was ignored.</div>`);
+        } else if (kind === 'ok' && cv !== current) {
+          status.insertAdjacentHTML(
+            'beforeend',
+            `<div class="tiny" style="margin-top:8px">Bill shows calorific value ${esc(cv)} MJ/m³ (yours is ${esc(current)}).</div>
+            <button class="btn secondary small" type="button" data-use-cv style="margin-top:6px">Use this value</button>`,
+          );
+          status.querySelector('[data-use-cv]').addEventListener('click', (ev) => {
+            update((st) => (st.settings.gas.calorificValue = cv));
+            ev.target.remove();
+            toast(`Calorific value set to ${cv}`);
+          });
+        }
+      }
     } catch (err) {
       status.innerHTML = `<span class="error">${esc(err.message)}</span>`;
     }
