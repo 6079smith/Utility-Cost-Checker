@@ -62,7 +62,7 @@ const fuelVar = (f) => (f === 'gas' ? 'gas' : 'elec');
 
 /** A meter reading as digit boxes, like the drums on the meter. */
 /** How many whole-number digits each meter shows. */
-const METER_DIGITS = { electricity: 5, gas: 4 };
+const METER_DIGITS = { electricity: 5, gas: 5 };
 
 function digitBoxes(value, fuel, { unit = true } = {}) {
   const [whole, frac] = String(value).split('.');

@@ -25,7 +25,7 @@ Installable iPhone web app (PWA) that estimates UK electricity and gas costs fro
 ## Decisions to keep (each fixed a real problem)
 
 - Style "B": dark by default, with Dark/Light/Auto at the top of Settings. Azeret Mono font (bundled via @fontsource, no slashed zeros). Readings are shown as digit boxes. The ring gauge always shows once there are readings, with placeholders before rates are known.
-- Meter digits are capped at electricity 5 and gas 4 (`METER_DIGITS`). Photo results with too many digits are rejected, never truncated.
+- Meter digits are capped at electricity 5 and gas 5 (`METER_DIGITS`). Photo results with too many digits are rejected, never truncated.
 - `MIN_RATE_HOURS = 6`: rates and projections stay hidden until readings span 6+ hours. Short gaps gave absurd extrapolations.
 - Reading dates use separate date and time inputs (the iPhone datetime-local picker lost the date). History entries can have their date edited. Readings are checked against the next later reading, not just the latest one.
 - "Read today/yesterday" labels work by calendar day. A "new or replaced meter" reading resets the series; the home screen only shows intervals from the current meter.
