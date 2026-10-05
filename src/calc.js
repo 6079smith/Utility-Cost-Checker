@@ -7,6 +7,8 @@
 export const GAS_VOLUME_CORRECTION = 1.02264;
 export const FT3_TO_M3 = 2.83168;
 export const DEFAULT_CALORIFIC_VALUE = 39.5;
+export const CV_MIN = 30;
+export const CV_MAX = 50;
 export const DEFAULT_VAT_RATE = 0.05;
 
 const HOUR = 3600e3;
@@ -20,6 +22,12 @@ const DAY = 24 * HOUR;
 export const MIN_RATE_HOURS = 6;
 
 const ms = (t) => (t instanceof Date ? t.getTime() : new Date(t).getTime());
+
+/** Classify a calorific value read from a bill: 'none' (null), 'ok' (30–50 MJ/m³) or 'bad'. */
+export function checkCalorificValue(v) {
+  if (v == null) return 'none';
+  return typeof v === 'number' && Number.isFinite(v) && v >= CV_MIN && v <= CV_MAX ? 'ok' : 'bad';
+}
 
 /** Convert a meter-unit difference to kWh. Electricity meters already read kWh. */
 export function toKwh(fuel, units, gas = {}) {

@@ -10,7 +10,7 @@ Installable iPhone web app (PWA) that estimates UK electricity and gas costs fro
 - Write user-facing text in plain British English. The owner isn't a developer: explain steps simply, one command at a time.
 - Keep `src/calc.js` pure and tested. Add a test for any cost-engine or tariff-date change.
 - Never commit secrets: API keys, the helper's access code, or the owner's Worker address.
-- Keep sessions short to save cost: each turn re-reads the whole conversation. Once a feature is finished and pushed, if the session has been long or the next request is unrelated, say in one line that starting a new session would be cheaper. Update this file first with any new decision worth keeping. A Stop hook (`.claude/hooks/session-size.mjs`) also shows this nudge automatically once the context passes ~150k tokens.
+- Keep sessions short to save cost: each turn re-reads the whole conversation. Claude can't see the token count, so don't guess that a session is "long": a single focused task is not long. Only suggest a new session when the next request is unrelated to the finished work, or when the Stop hook's nudge has appeared (context past ~150k tokens). Then say it in one line. Never add the nudge by default after every task. Update this file first with any new decision worth keeping. A Stop hook (`.claude/hooks/session-size.mjs`) also shows this nudge automatically once the context passes ~150k tokens.
 
 ## Architecture
 

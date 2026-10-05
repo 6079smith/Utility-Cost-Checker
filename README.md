@@ -69,7 +69,7 @@ In **Settings → Share with family**, tap **Share app link** (tick "Include pho
 
 **Tariff history:** each fuel keeps a list of tariffs with start and end dates (Settings → *Add tariff*, *Edit dates*). Enter past contracts with their dates and every day between readings is charged at the tariff that applied that day. Dates can't overlap; one contract ending 16 Aug and the next starting 17 Aug is fine.
 
-**Other suppliers (e.g. British Gas):** Settings → *Add tariff* → *Other supplier* → *Read prices from a bill*. Take a photo of a bill or annual statement (or choose a PDF) and Claude fills in the supplier, unit rate(s), standing charge, VAT setting and contract dates for you to check. Costs a few pence per bill. Needs the photo helper updated after this feature was added (`git pull`, then `npx wrangler deploy` in `worker/`).
+**Other suppliers (e.g. British Gas):** Settings → *Add tariff* → *Other supplier* → *Read prices from a bill*. Take a photo of a bill or annual statement (or choose a PDF) and Claude fills in the supplier, unit rate(s), standing charge, VAT setting and contract dates for you to check. Costs a few pence per bill. For gas, it also reads the calorific value and offers a **Use this value** button; your setting never changes unless you tap it. Needs the photo helper updated after this feature was added (`git pull`, then `npx wrangler deploy` in `worker/`).
 
 **Changing supplier:** Settings → *Add tariff* → set the date the new tariff started.
 
