@@ -733,8 +733,19 @@ function renderHistory() {
   );
   view.querySelectorAll('[data-del]').forEach((b) =>
     b.addEventListener('click', () => {
-      if (!confirm('Delete this reading?')) return;
+      // iOS home-screen apps can silently block confirm(), so ask with a second tap instead.
+      if (!b.dataset.armed) {
+        b.dataset.armed = '1';
+        b.textContent = 'Tap again to delete';
+        setTimeout(() => {
+          if (!b.isConnected) return;
+          delete b.dataset.armed;
+          b.textContent = 'Delete';
+        }, 4000);
+        return;
+      }
       update((s) => (s.readings = s.readings.filter((r) => r.id !== b.dataset.del)));
+      toast('Reading deleted');
       renderHistory();
     }),
   );
