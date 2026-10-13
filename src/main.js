@@ -656,6 +656,24 @@ function renderAdd() {
   refresh();
 }
 
+/** Two-tap confirmation: iOS home-screen apps can silently block confirm(). */
+function tapAgain(btn, armedText, action) {
+  btn.addEventListener('click', () => {
+    if (!btn.dataset.armed) {
+      const label = btn.textContent;
+      btn.dataset.armed = '1';
+      btn.textContent = armedText;
+      setTimeout(() => {
+        if (!btn.isConnected) return;
+        delete btn.dataset.armed;
+        btn.textContent = label;
+      }, 4000);
+      return;
+    }
+    action();
+  });
+}
+
 // ---------- history ----------
 
 let historyFuel = 'electricity';
@@ -733,18 +751,7 @@ function renderHistory() {
     }),
   );
   view.querySelectorAll('[data-del]').forEach((b) =>
-    b.addEventListener('click', () => {
-      // iOS home-screen apps can silently block confirm(), so ask with a second tap instead.
-      if (!b.dataset.armed) {
-        b.dataset.armed = '1';
-        b.textContent = 'Tap again to delete';
-        setTimeout(() => {
-          if (!b.isConnected) return;
-          delete b.dataset.armed;
-          b.textContent = 'Delete';
-        }, 4000);
-        return;
-      }
+    tapAgain(b, 'Tap again to delete', () => {
       update((s) => (s.readings = s.readings.filter((r) => r.id !== b.dataset.del)));
       toast('Reading deleted');
       renderHistory();
@@ -1015,10 +1022,10 @@ function renderSettings() {
     }),
   );
   view.querySelectorAll('[data-tdel]').forEach((b) =>
-    b.addEventListener('click', () => {
+    tapAgain(b, 'Tap again to delete', () => {
       const t = tariffById(b.dataset.tdel);
-      if (!confirm(`Delete ${describeTariff(t)}? Readings from that time will show no cost until another tariff covers them.`)) return;
       update((st) => (st.tariffs = st.tariffs.filter((x) => x.id !== t.id)));
+      toast('Tariff deleted');
       renderSettings();
     }),
   );
@@ -1101,12 +1108,10 @@ function renderSettings() {
     a.click();
     setTimeout(() => URL.revokeObjectURL(a.href), 1000);
   });
-  view.querySelector('#clear-readings').addEventListener('click', () => {
-    const n = getState().readings.length;
-    if (!n) return toast('There are no readings to delete');
-    if (!confirm(`Delete all ${n} readings from this phone? Your tariffs and settings are kept. This can’t be undone unless you have a backup.`)) return;
+  tapAgain(view.querySelector('#clear-readings'), 'Tap again to delete all readings', () => {
     update((st) => (st.readings = []));
     toast('All readings deleted');
+    renderSettings();
   });
   view.querySelector('#import-file').addEventListener('change', async (e) => {
     const file = e.target.files?.[0];
