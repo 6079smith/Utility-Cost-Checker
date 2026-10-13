@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { checkCalorificValue } from '../src/calc.js';
 import { billRequest, BILL_SCHEMA } from '../src/meterPrompt.js';
 
 test('PDF bills are sent as documents, photos as images', () => {
@@ -20,4 +21,19 @@ test('bill schema requires every field (structured outputs)', () => {
     }
   };
   check(BILL_SCHEMA);
+});
+
+test('bill schema asks for the gas calorific value', () => {
+  assert.ok(BILL_SCHEMA.properties.gas.required.includes('calorific_value'));
+});
+
+test('calorific value from a bill is checked against 30–50', () => {
+  assert.equal(checkCalorificValue(39.1), 'ok');
+  assert.equal(checkCalorificValue(30), 'ok');
+  assert.equal(checkCalorificValue(50), 'ok');
+  assert.equal(checkCalorificValue(null), 'none');
+  assert.equal(checkCalorificValue(undefined), 'none');
+  assert.equal(checkCalorificValue(1.02264), 'bad');
+  assert.equal(checkCalorificValue(51), 'bad');
+  assert.equal(checkCalorificValue(NaN), 'bad');
 });

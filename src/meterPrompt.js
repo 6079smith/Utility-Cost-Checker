@@ -125,6 +125,7 @@ export const BILL_SYSTEM = `You read UK domestic energy bills and annual stateme
 - prices_include_vat: true if the rates as printed already include VAT, false if VAT (5%) is added separately.
 - Dates as YYYY-MM-DD. tariff_start / tariff_end are the contract or tariff dates (e.g. "Fixed until", "Tariff end date"); null if not shown. bill_period_start / bill_period_end are the dates the bill covers.
 - supplier is the company (e.g. "British Gas"); tariff_name is the tariff as printed (e.g. "Fixed Price Nov 2026").
+- Gas calorific value (calorific_value): in MJ/m³, usually 37–42. If the bill shows several, report the average for the bill period. If none is shown, report null. Don't confuse it with the volume correction (1.02264) or with kWh figures.
 - If the image is not an energy bill or is unreadable, set found to false for both fuels and explain in "notes".`;
 
 const price = { type: ['number', 'null'] };
@@ -143,8 +144,8 @@ export const BILL_SCHEMA = {
     },
     gas: {
       type: 'object',
-      properties: { found: { type: 'boolean' }, unit_rate_p: price, standing_charge_p: price },
-      required: ['found', 'unit_rate_p', 'standing_charge_p'],
+      properties: { found: { type: 'boolean' }, unit_rate_p: price, standing_charge_p: price, calorific_value: { type: ['number', 'null'] } },
+      required: ['found', 'unit_rate_p', 'standing_charge_p', 'calorific_value'],
       additionalProperties: false,
     },
     prices_include_vat: { type: 'boolean' },

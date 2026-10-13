@@ -10,7 +10,7 @@ Installable iPhone web app (PWA) that estimates UK electricity and gas costs fro
 - Write user-facing text in plain British English. The owner isn't a developer: explain steps simply, one command at a time.
 - Keep `src/calc.js` pure and tested. Add a test for any cost-engine or tariff-date change.
 - Never commit secrets: API keys, the helper's access code, or the owner's Worker address.
-- Keep sessions short to save cost: each turn re-reads the whole conversation. Once a feature is finished and pushed, if the session has been long or the next request is unrelated, say in one line that starting a new session would be cheaper. Update this file first with any new decision worth keeping. A Stop hook (`.claude/hooks/session-size.mjs`) also shows this nudge automatically once the context passes ~150k tokens.
+- Keep sessions short to save cost: each turn re-reads the whole conversation. Claude can't see the token count, so don't guess that a session is "long": a single focused task is not long. Only suggest a new session when the next request is unrelated to the finished work, or when the Stop hook's nudge has appeared (context past ~150k tokens). Then say it in one line. Never add the nudge by default after every task. Update this file first with any new decision worth keeping. A Stop hook (`.claude/hooks/session-size.mjs`) also shows this nudge automatically once the context passes ~150k tokens.
 
 ## Architecture
 
@@ -25,7 +25,7 @@ Installable iPhone web app (PWA) that estimates UK electricity and gas costs fro
 ## Decisions to keep (each fixed a real problem)
 
 - Style "B": dark by default, with Dark/Light/Auto at the top of Settings. Azeret Mono font (bundled via @fontsource, no slashed zeros). Readings are shown as digit boxes. The ring gauge always shows once there are readings, with placeholders before rates are known.
-- Meter digits are capped at electricity 5 and gas 4 (`METER_DIGITS`). Photo results with too many digits are rejected, never truncated.
+- Meter digits are capped at electricity 5 and gas 5 (`METER_DIGITS`). Photo results with too many digits are rejected, never truncated.
 - `MIN_RATE_HOURS = 6`: rates and projections stay hidden until readings span 6+ hours. Short gaps gave absurd extrapolations.
 - Reading dates use separate date and time inputs (the iPhone datetime-local picker lost the date). History entries can have their date edited. Readings are checked against the next later reading, not just the latest one.
 - "Read today/yesterday" labels work by calendar day. A "new or replaced meter" reading resets the series; the home screen only shows intervals from the current meter.
